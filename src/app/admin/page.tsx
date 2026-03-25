@@ -15,6 +15,8 @@ interface AdminConfig {
   forwardRules: ForwardRule[];
   siteName: string;
   autoDeleteHours: number;
+  linkFilter: string;
+  hasSitePassword: boolean;
 }
 
 interface Stats {
@@ -31,7 +33,10 @@ export default function AdminPage() {
     forwardRules: [],
     siteName: "云端接码",
     autoDeleteHours: 24,
+    linkFilter: "",
+    hasSitePassword: false,
   });
+  const [newSitePassword, setNewSitePassword] = useState("");
   const [stats, setStats] = useState<Stats>({ totalEmails: 0, todayEmails: 0 });
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -116,16 +121,21 @@ export default function AdminPage() {
     if (!token) return;
     setSaving(true);
     try {
+      const body: Record<string, unknown> = { ...config };
+      if (newSitePassword) {
+        body.sitePassword = newSitePassword;
+      }
       const res = await fetch(`${WORKER_URL}/api/admin/config`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(config),
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
       });
       if (res.ok) {
         showToast("✅ 配置已保存");
+        setNewSitePassword("");
+        if (newSitePassword) {
+          setConfig((c) => ({ ...c, hasSitePassword: true }));
+        }
       } else {
         showToast("❌ 保存失败");
       }
@@ -133,6 +143,24 @@ export default function AdminPage() {
       showToast("❌ 保存失败，请检查网络");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const clearSitePassword = async () => {
+    if (!token) return;
+    if (!confirm("确定移除首页访问密码？移除后所有人可直接访问。")) return;
+    try {
+      const res = await fetch(`${WORKER_URL}/api/admin/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ clearSitePassword: true }),
+      });
+      if (res.ok) {
+        setConfig((c) => ({ ...c, hasSitePassword: false }));
+        showToast("✅ 已移除首页密码");
+      }
+    } catch {
+      showToast("❌ 操作失败");
     }
   };
 
@@ -273,12 +301,12 @@ export default function AdminPage() {
           </div>
         </div>
 
-        {/* Site Name */}
+        {/* Site Settings */}
         <div className="card mb-6">
           <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--primary)" }}>
             📝 站点设置
           </h2>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-sm text-gray-600 mb-1">站点名称</label>
               <input
@@ -290,20 +318,57 @@ export default function AdminPage() {
               />
             </div>
             <div>
-              <label className="block text-sm text-gray-600 mb-1">
-                邮件自动删除（小时）
-              </label>
+              <label className="block text-sm text-gray-600 mb-1">邮件自动删除（小时）</label>
               <input
                 type="number"
                 value={config.autoDeleteHours}
-                onChange={(e) =>
-                  setConfig({ ...config, autoDeleteHours: parseInt(e.target.value) || 24 })
-                }
+                onChange={(e) => setConfig({ ...config, autoDeleteHours: parseInt(e.target.value) || 24 })}
                 className="email-input"
                 style={{ textAlign: "left", fontSize: "14px" }}
                 min={1}
               />
             </div>
+          </div>
+
+          {/* Link Filter */}
+          <div className="mb-4">
+            <label className="block text-sm text-gray-600 mb-1">
+              🔍 链接过滤（只显示 URL 包含此内容的链接）
+            </label>
+            <input
+              type="text"
+              value={config.linkFilter}
+              onChange={(e) => setConfig({ ...config, linkFilter: e.target.value })}
+              placeholder="如：https://auth.heygen.com/  留空则显示所有链接"
+              className="email-input"
+              style={{ textAlign: "left", fontSize: "14px" }}
+            />
+          </div>
+
+          {/* Site Password */}
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">
+              🔒 首页访问密码{config.hasSitePassword && <span className="ml-2 text-green-600 font-medium">（已设置）</span>}
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={newSitePassword}
+                onChange={(e) => setNewSitePassword(e.target.value)}
+                placeholder={config.hasSitePassword ? "输入新密码以修改" : "设置后首页需要密码才能访问"}
+                className="email-input flex-1"
+                style={{ textAlign: "left", fontSize: "14px" }}
+              />
+              {config.hasSitePassword && (
+                <button
+                  onClick={clearSitePassword}
+                  className="px-4 py-2 rounded-lg text-sm text-red-500 border border-red-200 hover:bg-red-50 whitespace-nowrap"
+                >
+                  移除密码
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-gray-400 mt-1">留空则不修改密码；管理后台有独立密码，不受此影响</p>
           </div>
         </div>
 

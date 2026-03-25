@@ -1,4 +1,12 @@
-// Generate a random email prefix
+const NAMES = [
+  "james","john","robert","michael","william","david","richard","joseph","thomas","charles",
+  "mary","patricia","jennifer","linda","barbara","elizabeth","susan","jessica","sarah","karen",
+  "alex","chris","jordan","taylor","morgan","casey","riley","jamie","avery","skyler",
+  "emma","liam","noah","olivia","sophia","lucas","mason","ethan","ava","isabella",
+  "jack","lily","ryan","grace","owen","zoe","evan","chloe","sean","maya",
+];
+
+// Generate a random email prefix (pure random chars)
 export function generatePrefix(length = 8): string {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
   let result = "";
@@ -6,6 +14,29 @@ export function generatePrefix(length = 8): string {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return result;
+}
+
+// Generate a name+number style prefix (e.g. james42, lily88)
+export function generateNamePrefix(): string {
+  const name = NAMES[Math.floor(Math.random() * NAMES.length)];
+  const num = Math.floor(Math.random() * 900) + 10; // 10–909
+  return `${name}${num}`;
+}
+
+// Generate several prefix options for the quick-pick list
+export function generatePrefixOptions(): { label: string; value: string }[] {
+  const options: { label: string; value: string }[] = [];
+  // 3 name+number options
+  for (let i = 0; i < 3; i++) {
+    const v = generateNamePrefix();
+    options.push({ label: v, value: v });
+  }
+  // 2 random char options
+  for (let i = 0; i < 2; i++) {
+    const v = generatePrefix(7);
+    options.push({ label: v, value: v });
+  }
+  return options;
 }
 
 // Pick a random domain from the list

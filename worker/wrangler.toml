@@ -12,6 +12,6 @@ database_id = "408fae3e-3d7c-492e-ac1a-2407e09ab9cc"
 
 [vars]
 # Comma-separated list of allowed frontend origins (for CORS)
-ALLOWED_ORIGINS = "https://temp-mail-nine-nu.vercel.app,http://localhost:3000"
+ALLOWED_ORIGINS = "https://temp-mail-nine-nu.vercel.app,https://temp-mail-83oxnvzp7-kaylamartinez200221-6476s-projects.vercel.app,http://localhost:3000"
 # Admin password (change this!)
 ADMIN_PASSWORD = "TempMail@2026!"

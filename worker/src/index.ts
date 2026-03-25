@@ -165,12 +165,35 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     const forwardRules = await getForwardRules(env.DB);
     const siteName = await getConfig(env.DB, "site_name");
     const autoDeleteHours = await getConfig(env.DB, "auto_delete_hours");
+    const linkFilter = await getConfig(env.DB, "link_filter");
+    const sitePasswordHash = await getConfig(env.DB, "site_password_hash");
     return Response.json({
       domains,
       forwardDomains: forwardRules.map((r) => r.subdomain),
       siteName: siteName || "云端接码",
       autoDeleteHours: parseInt(autoDeleteHours) || 24,
+      linkFilter: linkFilter || "",
+      hasPassword: sitePasswordHash !== "",
     }, { headers });
+  }
+
+  // POST /api/site-login
+  if (url.pathname === "/api/site-login" && request.method === "POST") {
+    const raw = await request.text();
+    const body = JSON.parse(raw) as { password: string };
+    const storedHash = await getConfig(env.DB, "site_password_hash");
+    if (!storedHash) {
+      return Response.json({ ok: true }, { headers });
+    }
+    const encoder = new TextEncoder();
+    const data = encoder.encode(body.password);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    if (hashHex === storedHash) {
+      return Response.json({ ok: true }, { headers });
+    }
+    return Response.json({ error: "密码错误" }, { status: 401, headers });
   }
 
   // GET /api/emails?address=xxx@domain.com
@@ -217,10 +240,14 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
       const forwardRules = await getForwardRules(env.DB);
       const siteName = await getConfig(env.DB, "site_name");
       const autoDeleteHours = await getConfig(env.DB, "auto_delete_hours");
+      const linkFilter = await getConfig(env.DB, "link_filter");
+      const hasSitePassword = (await getConfig(env.DB, "site_password_hash")) !== "";
       return Response.json({
         domains, forwardRules,
         siteName: siteName || "云端接码",
         autoDeleteHours: parseInt(autoDeleteHours) || 24,
+        linkFilter: linkFilter || "",
+        hasSitePassword,
       }, { headers });
     }
 
@@ -232,11 +259,24 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
         forwardRules?: ForwardRule[];
         siteName?: string;
         autoDeleteHours?: number;
+        linkFilter?: string;
+        sitePassword?: string;   // plain text, will be hashed
+        clearSitePassword?: boolean;
       };
       if (body.domains !== undefined) await setConfig(env.DB, "domains", JSON.stringify(body.domains));
       if (body.forwardRules !== undefined) await setConfig(env.DB, "forward_rules", JSON.stringify(body.forwardRules));
       if (body.siteName !== undefined) await setConfig(env.DB, "site_name", body.siteName);
       if (body.autoDeleteHours !== undefined) await setConfig(env.DB, "auto_delete_hours", String(body.autoDeleteHours));
+      if (body.linkFilter !== undefined) await setConfig(env.DB, "link_filter", body.linkFilter);
+      if (body.clearSitePassword) await setConfig(env.DB, "site_password_hash", "");
+      if (body.sitePassword) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(body.sitePassword);
+        const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+        await setConfig(env.DB, "site_password_hash", hashHex);
+      }
       return Response.json({ ok: true }, { headers });
     }
 
