@@ -408,7 +408,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
   // ── Password Manager endpoints ──
 
-  // GET /api/passwords?tag=ck&page=1&limit=50&start=timestamp&end=timestamp
+  // GET /api/passwords?tag=ck&page=1&limit=50&start=timestamp&end=timestamp&linkStart=timestamp&linkEnd=timestamp
   if (url.pathname === "/api/passwords" && request.method === "GET") {
     if (!await checkAuthFull(request, env)) {
       return Response.json({ error: "unauthorized" }, { status: 401, headers });
@@ -418,20 +418,22 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get("limit") || "50")));
     const start = url.searchParams.get("start") || "";
     const end = url.searchParams.get("end") || "";
+    const linkStart = url.searchParams.get("linkStart") || "";
+    const linkEnd = url.searchParams.get("linkEnd") || "";
     const offset = (page - 1) * limit;
 
-    // Only show confirmed addresses (those that have received at least one email)
-    // Support both new format (label=tag) and old format (address LIKE '%-tag@%')
     let where = tag ? "WHERE confirmed = 1 AND (label = ? OR address LIKE ?)" : "WHERE confirmed = 1";
     const binds: (string | number)[] = tag ? [tag, `%-${tag}@%`] : [];
-    if (start) { where += " AND (COALESCE(updated_at, created_at)) >= ?"; binds.push(parseInt(start)); }
-    if (end) { where += " AND (COALESCE(updated_at, created_at)) <= ?"; binds.push(parseInt(end)); }
+    if (start) { where += " AND created_at >= ?"; binds.push(parseInt(start)); }
+    if (end) { where += " AND created_at <= ?"; binds.push(parseInt(end)); }
+    if (linkStart) { where += " AND last_link_received_at >= ?"; binds.push(parseInt(linkStart)); }
+    if (linkEnd) { where += " AND last_link_received_at <= ?"; binds.push(parseInt(linkEnd)); }
 
     const countRow = await env.DB.prepare(`SELECT COUNT(*) as total FROM passwords ${where}`).bind(...binds).first() as { total: number } | null;
     const total = countRow?.total || 0;
 
     const rows = await env.DB.prepare(
-      `SELECT address, password, label, created_at, updated_at FROM passwords ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`
+      `SELECT address, password, label, created_at, updated_at, last_link_received_at FROM passwords ${where} ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ? OFFSET ?`
     ).bind(...binds, limit, offset).all();
 
     return Response.json({ passwords: rows.results || [], total, page, limit }, { headers });
@@ -734,6 +736,23 @@ export default {
     await env.DB.prepare(
       "INSERT INTO emails (id, mail_to, mail_from, subject, text_body, html_body, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)"
     ).bind(generateId(), accountAddress, message.from, subject, textBody, htmlBody, now).run();
+
+    // Update last_link_received_at if email contains a link matching linkFilter
+    const linkFilter = await getConfig(env.DB, "link_filter");
+    if (linkFilter) {
+      const content = htmlBody + textBody;
+      const re = /https?:\/\/[^\s"'<>)]+/g;
+      let m: RegExpExecArray | null;
+      let hasMatch = false;
+      while ((m = re.exec(content)) !== null) {
+        if (m[0].includes(linkFilter)) { hasMatch = true; break; }
+      }
+      if (hasMatch) {
+        await env.DB.prepare(
+          "UPDATE passwords SET last_link_received_at = ? WHERE address = ?"
+        ).bind(now, accountAddress).run();
+      }
+    }
   },
 
   async fetch(request: Request, env: Env): Promise<Response> {

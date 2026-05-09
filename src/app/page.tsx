@@ -18,6 +18,7 @@ interface PwEntry {
   label: string;
   created_at: number;
   updated_at: number;
+  last_link_received_at: number | null;
 }
 interface Email {
   id: string;
@@ -629,9 +630,11 @@ export default function Home() {
     }
   };
 
-  // Date range filter
+  // Date range filters
   const [startDate, setStartDate] = useState("");
   const [endDate,   setEndDate]   = useState("");
+  const [linkStartDate, setLinkStartDate] = useState("");
+  const [linkEndDate,   setLinkEndDate]   = useState("");
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 50;
 
@@ -667,6 +670,8 @@ export default function Home() {
       if (activeTag !== "all") params.set("tag", activeTag);
       if (startDate) params.set("start", String(new Date(startDate + "T00:00:00").getTime()));
       if (endDate) params.set("end", String(new Date(endDate + "T23:59:59").getTime()));
+      if (linkStartDate) params.set("linkStart", String(new Date(linkStartDate + "T00:00:00").getTime()));
+      if (linkEndDate) params.set("linkEnd", String(new Date(linkEndDate + "T23:59:59").getTime()));
       const res = await fetch(`${WORKER_URL}/api/passwords?${params}`, {
         headers: { "Authorization": `Bearer ${adminToken}` },
       });
@@ -677,12 +682,12 @@ export default function Home() {
         setTotalEntries(d.total || 0);
       }
     } finally { setLoading(false); }
-  }, [adminToken, activeTag, startDate, endDate, page]);
+  }, [adminToken, activeTag, startDate, endDate, linkStartDate, linkEndDate, page]);
 
   useEffect(() => { loadEntries(); }, [loadEntries]);
 
   // Reset to page 1 when filter/tag changes
-  useEffect(() => { setPage(1); }, [activeTag, startDate, endDate]);
+  useEffect(() => { setPage(1); }, [activeTag, startDate, endDate, linkStartDate, linkEndDate]);
 
   const totalPages = Math.max(1, Math.ceil(totalEntries / PAGE_SIZE));
 
@@ -698,6 +703,7 @@ export default function Home() {
     setExpanded((prev) => ({ ...prev, [address]: !prev[address] }));
 
   const hasDateFilter = startDate || endDate;
+  const hasLinkFilter = linkStartDate || linkEndDate;
 
   if (!adminToken) {
     return (
@@ -763,32 +769,36 @@ export default function Home() {
             <button onClick={() => loadEntries()} className="text-sm text-gray-400 hover:text-gray-600">🔄 刷新</button>
           </div>
 
-          {/* Date range filter */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-gray-500 shrink-0">时间范围：</span>
-            <input
-              type="date"
-              value={startDate}
-              onChange={e => setStartDate(e.target.value)}
-              className="text-xs rounded-lg border px-2 py-1.5 outline-none"
-              style={{ borderColor: "#e0e0e0", color: "var(--primary-dark)" }}
-            />
-            <span className="text-xs text-gray-400">—</span>
-            <input
-              type="date"
-              value={endDate}
-              onChange={e => setEndDate(e.target.value)}
-              className="text-xs rounded-lg border px-2 py-1.5 outline-none"
-              style={{ borderColor: "#e0e0e0", color: "var(--primary-dark)" }}
-            />
-            {hasDateFilter && (
-              <button
-                onClick={() => { setStartDate(""); setEndDate(""); }}
-                className="text-xs text-gray-400 hover:text-red-400"
-              >
-                ✕ 清除
-              </button>
-            )}
+          {/* Date filters */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-500 shrink-0 w-20">创建日期：</span>
+              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+                className="text-xs rounded-lg border px-2 py-1.5 outline-none"
+                style={{ borderColor: "#e0e0e0", color: "var(--primary-dark)" }} />
+              <span className="text-xs text-gray-400">—</span>
+              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+                className="text-xs rounded-lg border px-2 py-1.5 outline-none"
+                style={{ borderColor: "#e0e0e0", color: "var(--primary-dark)" }} />
+              {hasDateFilter && (
+                <button onClick={() => { setStartDate(""); setEndDate(""); }}
+                  className="text-xs text-gray-400 hover:text-red-400">✕ 清除</button>
+              )}
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-500 shrink-0 w-20">收到链接：</span>
+              <input type="date" value={linkStartDate} onChange={e => setLinkStartDate(e.target.value)}
+                className="text-xs rounded-lg border px-2 py-1.5 outline-none"
+                style={{ borderColor: "#e0e0e0", color: "var(--primary-dark)" }} />
+              <span className="text-xs text-gray-400">—</span>
+              <input type="date" value={linkEndDate} onChange={e => setLinkEndDate(e.target.value)}
+                className="text-xs rounded-lg border px-2 py-1.5 outline-none"
+                style={{ borderColor: "#e0e0e0", color: "var(--primary-dark)" }} />
+              {hasLinkFilter && (
+                <button onClick={() => { setLinkStartDate(""); setLinkEndDate(""); }}
+                  className="text-xs text-gray-400 hover:text-red-400">✕ 清除</button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -812,7 +822,12 @@ export default function Home() {
                   <div className="font-mono text-sm font-semibold truncate" style={{ color: "var(--primary-dark)" }}>
                     {entry.address}
                   </div>
-                  <div className="text-xs text-gray-400 mt-0.5">创建于 {formatTime(entry.created_at)}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">
+                    创建于 {formatTime(entry.created_at)}
+                    {entry.last_link_received_at && (
+                      <span className="ml-2">· 收到链接 {formatTime(entry.last_link_received_at)}</span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button onClick={() => toggleInbox(entry.address)} className="icon-btn" title="查看收件箱"
