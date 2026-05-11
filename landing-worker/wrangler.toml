@@ -3,37 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
 
+# Add your domains here (one entry per domain, with and without www)
+# The AI_SETUP_GUIDE.md landing-worker section will fill these in automatically
 routes = [
-  { pattern = "zxjbf.site/*", zone_name = "zxjbf.site" },
-  { pattern = "www.zxjbf.site/*", zone_name = "zxjbf.site" },
-  { pattern = "yidkobzu.shop/*", zone_name = "yidkobzu.shop" },
-  { pattern = "www.yidkobzu.shop/*", zone_name = "yidkobzu.shop" },
-  { pattern = "beeftown.store/*", zone_name = "beeftown.store" },
-  { pattern = "www.beeftown.store/*", zone_name = "beeftown.store" },
-  { pattern = "dreambuilderweb.website/*", zone_name = "dreambuilderweb.website" },
-  { pattern = "www.dreambuilderweb.website/*", zone_name = "dreambuilderweb.website" },
-  { pattern = "buymorec.shop/*", zone_name = "buymorec.shop" },
-  { pattern = "www.buymorec.shop/*", zone_name = "buymorec.shop" },
-  { pattern = "kellyyan.space/*", zone_name = "kellyyan.space" },
-  { pattern = "www.kellyyan.space/*", zone_name = "kellyyan.space" },
-  { pattern = "stevencomputer.online/*", zone_name = "stevencomputer.online" },
-  { pattern = "www.stevencomputer.online/*", zone_name = "stevencomputer.online" },
-  { pattern = "cornerclip.online/*", zone_name = "cornerclip.online" },
-  { pattern = "www.cornerclip.online/*", zone_name = "cornerclip.online" },
-  { pattern = "shopclip.online/*", zone_name = "shopclip.online" },
-  { pattern = "www.shopclip.online/*", zone_name = "shopclip.online" },
-  { pattern = "clipvid.site/*", zone_name = "clipvid.site" },
-  { pattern = "www.clipvid.site/*", zone_name = "clipvid.site" },
-  { pattern = "barberly.site/*", zone_name = "barberly.site" },
-  { pattern = "www.barberly.site/*", zone_name = "barberly.site" },
-  { pattern = "tinyshop.site/*", zone_name = "tinyshop.site" },
-  { pattern = "www.tinyshop.site/*", zone_name = "tinyshop.site" },
-  { pattern = "graphicpro.site/*", zone_name = "graphicpro.site" },
-  { pattern = "www.graphicpro.site/*", zone_name = "graphicpro.site" },
-  { pattern = "logocraft.site/*", zone_name = "logocraft.site" },
-  { pattern = "www.logocraft.site/*", zone_name = "logocraft.site" },
-  { pattern = "adclip.site/*", zone_name = "adclip.site" },
-  { pattern = "www.adclip.site/*", zone_name = "adclip.site" },
-  { pattern = "videoad.site/*", zone_name = "videoad.site" },
-  { pattern = "www.videoad.site/*", zone_name = "videoad.site" },
+  { pattern = "yourdomain.top/*", zone_name = "yourdomain.top" },
+  { pattern = "www.yourdomain.top/*", zone_name = "yourdomain.top" },
 ]

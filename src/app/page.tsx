@@ -51,13 +51,6 @@ function extractLinks(html: string, text: string): string[] {
   return links;
 }
 
-function isActivationLink(url: string): boolean {
-  return url.startsWith("https://auth.heygen.com/");
-}
-
-function isSpamEmail(subject: string): boolean {
-  return subject.toLowerCase().includes("your video is ready");
-}
 
 // ── Generate Email Panel (per-tag address generator) ───────────────────────
 function GenerateEmailPanel({ tag, allDomains, adminToken }: { tag: string; allDomains: string[]; adminToken: string }) {
@@ -337,7 +330,7 @@ function EmailPanel({ address, onClose }: { address: string; onClose: () => void
       {loading && <p className="text-center text-gray-400 py-4 text-sm">加载中...</p>}
       {!loading && emails.length === 0 && <p className="text-center text-gray-400 py-4 text-sm">暂无邮件</p>}
 
-      {emails.filter(e => !isSpamEmail(e.subject || "")).map((email) => {
+      {emails.map((email) => {
         const isOpen = expanded === email.id;
         const links = extractLinks(email.html || "", email.text || "");
         return (
@@ -352,19 +345,6 @@ function EmailPanel({ address, onClose }: { address: string; onClose: () => void
             </div>
             {isOpen && (
               <div className="px-3 pb-3">
-                {(() => { const act = links.filter(isActivationLink); return act.length > 0 ? (
-                  <div className="mb-2">
-                    <div className="text-xs font-semibold mb-1" style={{ color: "var(--primary)" }}>🔑 激活链接</div>
-                    {act.map((link, i) => (
-                      <div key={i} className="flex items-center gap-1 mb-1">
-                        <span className="text-xs text-blue-600 truncate flex-1 font-mono">{link}</span>
-                        <button onClick={() => copy(link, "激活链接已复制")}
-                          className="text-xs px-2 py-0.5 rounded shrink-0 font-medium"
-                          style={{ background: "var(--primary)", color: "white" }}>复制</button>
-                      </div>
-                    ))}
-                  </div>
-                ) : null; })()}
                 <button
                   onClick={() => setContentExpanded(contentExpanded === email.id ? null : email.id)}
                   className="text-xs px-2 py-1 rounded transition-colors"
@@ -540,7 +520,7 @@ function TagEmailsPanel({ tag }: { tag: string }) {
           {loading && <p className="text-center text-gray-400 py-4 text-sm">加载中...</p>}
           {!loading && allEmails.length === 0 && <p className="text-center text-gray-400 py-4 text-sm">暂无邮件</p>}
 
-          {allEmails.filter(e => !isSpamEmail(e.subject || "")).map((email) => {
+          {allEmails.map((email) => {
             const isOpen = expandedId === email.id;
             const detail = emailDetail[email.id];
             return (

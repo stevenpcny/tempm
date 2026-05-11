@@ -368,7 +368,7 @@ export default function AdminPage() {
               type="text"
               value={config.linkFilter}
               onChange={(e) => setConfig({ ...config, linkFilter: e.target.value })}
-              placeholder="如：https://auth.heygen.com/  留空则显示所有链接"
+              placeholder="如：auth.example.com  留空则不提取激活链接"
               className="email-input"
               style={{ textAlign: "left", fontSize: "14px" }}
             />

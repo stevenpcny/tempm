@@ -493,12 +493,20 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
       .sort((a, b) => ((b as Record<string, unknown>).timestamp as number) - ((a as Record<string, unknown>).timestamp as number))
       .slice(0, 200);
 
+    const linkFilter = await getConfig(env.DB, "link_filter");
     const emails = merged.map((row: Record<string, unknown>) => {
       const content = ((row.html_body as string) || "") + " " + ((row.text_body as string) || "");
-      const m = content.match(/https:\/\/auth\.heygen\.com\/[^\s"'<>)]+/);
+      let activationLink: string | null = null;
+      if (linkFilter) {
+        const re = /https?:\/\/[^\s"'<>)]+/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(content)) !== null) {
+          if (m[0].includes(linkFilter)) { activationLink = m[0].replace(/[.,;!?]+$/, ""); break; }
+        }
+      }
       return {
         id: row.id, to: row.to, from: row.from, subject: row.subject, timestamp: row.timestamp,
-        activationLink: m ? m[0].replace(/[.,;!?]+$/, "") : null,
+        activationLink,
       };
     });
     return Response.json({ emails }, { headers });
