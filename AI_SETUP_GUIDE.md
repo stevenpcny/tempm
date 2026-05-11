@@ -30,37 +30,65 @@ Phase 9  → 验证并引导完成管理员面板配置
 
 ## Phase 1：一次性收集所有必要信息
 
-**所有信息一次性问完，之后不再打断用户。**
+**先询问用户是否已有域名，再根据回答决定后续流程。**
+
+### 1.1 询问域名情况
 
 ```
-我需要以下信息来完成自动部署，请一次性提供：
+你已经有一个可以用来接收邮件的域名了吗？
+（比如 yourdomain.top 这样的域名）
 
-1. 收信域名：你打算用哪个域名接收邮件？
-   （例如：yourdomain.top，如有多个请用逗号分隔）
+- 如果有，告诉我域名是什么、在哪个平台购买的
+- 如果没有，我来引导你在 Namecheap 购买一个，大约 $1–5 美元/年
+```
 
-2. 域名注册商：域名在哪个平台购买的？
-   （例如：Namecheap、Porkbun、GoDaddy、Dynadot 等）
+**如果用户没有域名 → 执行 1.2（引导购买）**
+**如果用户已有域名 → 跳到 1.3（收集凭据）**
 
-3. Cloudflare Global API Key：
-   - 打开 https://dash.cloudflare.com/profile/api-tokens
-   - 页面下方找到 "Global API Key"，点击 "View"，输入密码后复制
-   请把这串 Key 发给我。
+---
 
-4. Cloudflare 账号邮箱：你登录 Cloudflare 用的邮箱地址。
+### 1.2 引导用户在 Namecheap 购买域名
 
-5. 管理员密码：我可以自动生成一个强密码，或你自己指定。
-   请输入"自动生成"，或直接告诉我你想要的密码。
+```
+我推荐在 Namecheap 购买，价格便宜，操作简单。以下是步骤：
 
-6. GitHub Token（用于推送代码触发 Vercel 部署）：
-   - 打开 https://github.com/settings/tokens
-   - 点击 "Generate new token (classic)"
-   - 勾选 repo 权限，生成后复制
-   （如果你打算手动连接 Vercel，这项可以跳过）
+1. 打开 https://www.namecheap.com
+2. 在首页搜索框输入你想要的域名名称（随便起一个，比如你的名字或项目名）
+3. 从搜索结果中选一个便宜的后缀：
+   - .top  通常 $1–2/年
+   - .site 通常 $1–3/年
+   - .online 通常 $1–3/年
+   - .store 通常 $1–5/年
+   （避免选 .com，第一年便宜但续费贵）
+4. 点击 "Add to cart" → 点击右上角购物车 → Checkout
+5. 注册或登录 Namecheap 账号
+6. 付款完成后，告诉我你买的域名是什么
+```
+
+等用户确认购买完成并告知域名后，将域名存入 `$DOMAIN`，将注册商设为 `namecheap`，继续 1.3。
+
+---
+
+### 1.3 收集剩余必要凭据（一次性问完）
+
+```
+很好！现在我还需要以下信息，请一起提供：
+
+1. Cloudflare Global API Key（用来自动配置邮件接收，不需要你手动操作 Cloudflare 网页）：
+   - 如果还没有 Cloudflare 账号，先免费注册：https://dash.cloudflare.com/sign-up
+   - 登录后打开：https://dash.cloudflare.com/profile/api-tokens
+   - 页面拉到底部，找到 "Global API Key"，点击 "View"，输入 Cloudflare 登录密码后复制这串 Key
+
+2. Cloudflare 账号邮箱：你注册/登录 Cloudflare 用的邮箱地址
+
+3. 管理员密码：这是进入本系统管理后台的密码，我可以自动生成，或你自己指定
+   输入"自动生成"，或直接告诉我你想要的密码
 ```
 
 收到回答后：
-- 如果用户选择自动生成密码，生成一个 16 位包含大小写字母、数字、符号的密码，**明确展示给用户，要求他保存到安全的地方**。
-- 将所有信息存入变量：`$CF_API_KEY`、`$CF_EMAIL`、`$DOMAIN`、`$REGISTRAR`、`$ADMIN_PASSWORD`
+- 如果用户选择自动生成密码，生成一个 16 位包含大小写字母、数字、符号的密码，**明确展示给用户，要求他保存好**。
+- 将所有信息存入变量：`$CF_API_KEY`、`$CF_EMAIL`、`$DOMAIN`、`$ADMIN_PASSWORD`
+- 注册商默认为 `namecheap`，除非用户明确说明其他平台，存入 `$REGISTRAR`
 
 ---
 
@@ -142,48 +170,67 @@ curl -s "https://api.cloudflare.com/client/v4/zones/$ZONE_ID" \
 
 ---
 
-## Phase 4：引导用户修改 NS 记录（唯一手动步骤）
+## Phase 4：引导用户在 Namecheap 修改 NS 记录（唯一手动步骤）
 
-根据 `$REGISTRAR` 提供针对性指引：
+默认按 Namecheap 流程引导。如果用户的注册商不是 Namecheap，跳到本节末尾的「其他注册商」。
 
 ```
-现在只需要你做一件事：去域名注册商把 NS 记录改为 Cloudflare 的地址。
+现在只需要做一件事：把域名的 NS 记录改为 Cloudflare 的地址，让 Cloudflare 接管你的域名。
 
 你的域名：$DOMAIN
-需要填入的 Nameserver：
-  - $NS1
-  - $NS2
+需要填入的两个 Nameserver 地址：
+  NS1：$NS1
+  NS2：$NS2
+
+请按以下步骤操作（大约 2 分钟）：
 ```
 
-**Namecheap：**
+**Namecheap（默认）：**
+
 ```
-1. 登录 namecheap.com → Domain List → 点击域名右侧 Manage
-2. 找到 NAMESERVERS，下拉选择 "Custom DNS"
-3. 填入上面两个 NS 地址，点击绿色对勾保存
+1. 打开 https://ap.www.namecheap.com/domains/list/
+   （登录后会直接看到你的域名列表）
+
+2. 找到域名 $DOMAIN，点击右侧的 "Manage" 按钮
+
+3. 在打开的页面中，找到 "NAMESERVERS" 一栏
+   （页面中间偏上的位置）
+
+4. 点击左边的下拉框，选择 "Custom DNS"
+   （原来可能显示 "Namecheap BasicDNS" 或类似字样）
+
+5. 第一行填入：$NS1
+   第二行填入：$NS2
+   （如果只显示一行输入框，填完第一个后点击旁边的 "+" 号添加第二行）
+
+6. 点击右侧的绿色对勾（✓）保存
+
+完成后告诉我，我来自动检测是否生效，不需要你等待。
 ```
 
-**Porkbun：**
+**如果用户的注册商是 Porkbun：**
 ```
-1. 登录 porkbun.com → 点击域名 → Details
-2. 找到 Nameservers，点击 Edit
-3. 清空原有内容，填入上面两个 NS 地址，保存
-```
-
-**GoDaddy：**
-```
-1. 登录 godaddy.com → My Products → 域名旁点击 DNS
-2. 找到 Nameservers → Change → Enter my own nameservers
-3. 填入上面两个 NS 地址，保存
+1. 登录 porkbun.com，点击域名右侧的 "Details"
+2. 找到 "Nameservers" 部分，点击 "Edit"
+3. 删除现有内容，分别填入 $NS1 和 $NS2，保存
 ```
 
-**Dynadot：**
+**如果用户的注册商是 GoDaddy：**
 ```
-1. 登录 dynadot.com → Domains → 点击域名
-2. DNS Settings → Name Servers → Custom Name Servers
-3. 填入上面两个 NS 地址，保存
+1. 登录 godaddy.com → 右上角账户 → My Products
+2. 找到域名，点击旁边的 DNS 按钮
+3. 页面下方找到 Nameservers → 点击 Change → 选择 "Enter my own nameservers"
+4. 分别填入 $NS1 和 $NS2，保存
 ```
 
-**其他注册商：** 告诉用户找到"DNS 设置"或"Name Servers"，改为自定义 NS，填入上面两个地址。
+**如果用户的注册商是 Dynadot：**
+```
+1. 登录 dynadot.com → My Domains → 点击域名
+2. 左侧菜单选 DNS Settings → Name Servers → Custom Name Servers
+3. 填入 $NS1 和 $NS2，保存
+```
+
+**其他注册商：** 告诉用户在注册商后台找到"Nameservers"或"DNS 设置"，选择"自定义 NS"，填入 $NS1 和 $NS2。
 
 修改完后告诉我，我来检测 NS 是否已生效，你不需要等待或计时。
 
