@@ -402,12 +402,16 @@ function EmailPanel({ address, onClose }: { address: string; onClose: () => void
   );
 }
 
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
 // ── TagEmailsPanel (all emails for all addresses under a tag) ───────────────
 interface TagEmailMeta { id: string; to: string; from: string; subject: string; timestamp: number; toAddress: string; activationLink: string | null; }
 
-function TagEmailsPanel({ tag, onConnStateChange }: { tag: string; onConnStateChange?: (connected: boolean) => void }) {
+type ConnState = "connecting" | "connected" | "reconnecting" | "sleeping";
+
+function TagEmailsPanel({ tag, onConnStateChange }: { tag: string; onConnStateChange?: (state: ConnState) => void }) {
   const [allEmails, setAllEmails] = useState<TagEmailMeta[]>([]);
-  const [connState, setConnState] = useState<"connecting" | "connected" | "reconnecting">("connecting");
+  const [connState, setConnState] = useState<ConnState>("connecting");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [open, setOpen] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -415,6 +419,7 @@ function TagEmailsPanel({ tag, onConnStateChange }: { tag: string; onConnStateCh
   const [emailDetail, setEmailDetail] = useState<Record<string, { html: string; text: string }>>({});
   const [detailLoading, setDetailLoading] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [wakeTrigger, setWakeTrigger] = useState(0);
   const [usedIds, setUsedIds] = useState<Set<string>>(() => {
     if (typeof window === "undefined") return new Set();
     try {
@@ -427,13 +432,52 @@ function TagEmailsPanel({ tag, onConnStateChange }: { tag: string; onConnStateCh
   const esRef = useRef<EventSource | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
+  const connStateRef = useRef<ConnState>("connecting");
+  const lastActivityRef = useRef(Date.now());
   const onConnStateChangeRef = useRef(onConnStateChange);
   useEffect(() => { onConnStateChangeRef.current = onConnStateChange; }, [onConnStateChange]);
+  useEffect(() => { connStateRef.current = connState; }, [connState]);
 
   useEffect(() => {
     if (connState === "connecting") return;
-    onConnStateChangeRef.current?.(connState === "connected");
+    onConnStateChangeRef.current?.(connState);
   }, [connState]);
+
+  // Track user activity
+  useEffect(() => {
+    const reset = () => { lastActivityRef.current = Date.now(); };
+    window.addEventListener("mousemove", reset, { passive: true });
+    window.addEventListener("click", reset, { passive: true });
+    window.addEventListener("keydown", reset, { passive: true });
+    window.addEventListener("scroll", reset, { passive: true });
+    return () => {
+      window.removeEventListener("mousemove", reset);
+      window.removeEventListener("click", reset);
+      window.removeEventListener("keydown", reset);
+      window.removeEventListener("scroll", reset);
+    };
+  }, []);
+
+  // Idle check — single interval for component lifetime
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (connStateRef.current !== "connected") return;
+      if (Date.now() - lastActivityRef.current > IDLE_TIMEOUT_MS) {
+        cancelledRef.current = true;
+        esRef.current?.close();
+        esRef.current = null;
+        if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+        setConnState("sleeping");
+      }
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const wakeUp = useCallback(() => {
+    lastActivityRef.current = Date.now();
+    setConnState("connecting");
+    setWakeTrigger(t => t + 1);
+  }, []);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
   const copy = async (text: string, label = "已复制") => {
@@ -477,6 +521,7 @@ function TagEmailsPanel({ tag, onConnStateChange }: { tag: string; onConnStateCh
   }, [tag]);
 
   // SSE setup: initial fetch to get existing emails, then persistent push connection
+  // wakeTrigger increments on manual wake-up to re-run this effect
   useEffect(() => {
     cancelledRef.current = false;
     lastTsRef.current = Date.now();
@@ -532,11 +577,24 @@ function TagEmailsPanel({ tag, onConnStateChange }: { tag: string; onConnStateCh
       esRef.current = null;
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     };
-  }, [tag]);
+  }, [tag, wakeTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="card mb-6" style={{ borderLeft: "3px solid var(--primary)" }}>
       {toast && <div className="toast">{toast}</div>}
+
+      {connState === "sleeping" && (
+        <div className="flex items-center justify-between px-3 py-2 mb-3 rounded-lg"
+          style={{ background: "#fef3c7", border: "1px solid #f59e0b" }}>
+          <span className="text-xs" style={{ color: "#92400e" }}>😴 5 分钟无操作已休眠，新邮件推送已暂停</span>
+          <button onClick={wakeUp}
+            className="text-xs px-3 py-1 rounded-lg font-medium ml-3 shrink-0"
+            style={{ background: "#f59e0b", color: "white" }}>
+            唤醒
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center justify-between cursor-pointer" onClick={() => setOpen(o => !o)}>
         <span className="font-semibold text-sm" style={{ color: "var(--primary)" }}>
           📨 -{tag} 全部收件
@@ -547,6 +605,8 @@ function TagEmailsPanel({ tag, onConnStateChange }: { tag: string; onConnStateCh
             <>
               {connState === "connected"
                 ? <span style={{ color: "#22c55e", fontSize: 10 }}>● 实时监听中</span>
+                : connState === "sleeping"
+                ? <span style={{ color: "#f59e0b", fontSize: 10 }}>😴 已休眠</span>
                 : <span style={{ color: "#f59e0b", fontSize: 10 }}>◌ 重连中...</span>
               }
               {lastUpdated && (
@@ -565,7 +625,9 @@ function TagEmailsPanel({ tag, onConnStateChange }: { tag: string; onConnStateCh
         <div className="mt-3 rounded-xl border overflow-hidden" style={{ borderColor: "var(--primary-light)" }}>
           {allEmails.length === 0 && (
             <p className="text-center text-gray-400 py-4 text-sm">
-              {connState === "connecting" ? "连接中..." : "暂无邮件，实时等待中..."}
+              {connState === "connecting" ? "连接中..."
+                : connState === "sleeping" ? "已休眠，点击唤醒后继续接收"
+                : "暂无邮件，实时等待中..."}
             </p>
           )}
 
@@ -672,10 +734,10 @@ export default function Home() {
   const [toast,      setToast]      = useState<string | null>(null);
   const [revealed,   setRevealed]   = useState<Record<string, boolean>>({});
   const [expanded,   setExpanded]   = useState<Record<string, boolean>>({});
-  const [sseConnected, setSseConnected] = useState(true);
+  const [sseState, setSseState] = useState<ConnState>("connecting");
 
   useEffect(() => {
-    if (activeTag === "all") setSseConnected(true);
+    if (activeTag === "all") setSseState("connected");
   }, [activeTag]);
 
   useEffect(() => {
@@ -806,7 +868,7 @@ export default function Home() {
   return (
     <div className="min-h-screen" style={{ background: "var(--bg)" }}>
       {toast && <div className="toast">{toast}</div>}
-      {activeTag !== "all" && !sseConnected && (
+      {activeTag !== "all" && sseState === "reconnecting" && (
         <div className="fixed top-0 left-0 right-0 z-50 text-center py-2.5 text-sm font-medium text-white"
           style={{ background: "#dc2626" }}>
           ⚠️ 连接已断开，正在重连中… 请勿生成新邮箱
@@ -837,8 +899,8 @@ export default function Home() {
         {/* Per-tag panels (non-"all" tabs only) */}
         {activeTag !== "all" && (
           <>
-            <GenerateEmailPanel key={`gen-${activeTag}`} tag={activeTag} allDomains={allDomains} adminToken={adminToken} sseDisabled={!sseConnected} />
-            <TagEmailsPanel key={`inbox-${activeTag}`} tag={activeTag} onConnStateChange={setSseConnected} />
+            <GenerateEmailPanel key={`gen-${activeTag}`} tag={activeTag} allDomains={allDomains} adminToken={adminToken} sseDisabled={sseState !== "connected"} />
+            <TagEmailsPanel key={`inbox-${activeTag}`} tag={activeTag} onConnStateChange={setSseState} />
           </>
         )}
 
