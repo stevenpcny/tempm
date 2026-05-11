@@ -1,161 +1,358 @@
-# ☁️ 云端接码 - 临时邮箱
+# 云端接码 — 自托管临时邮箱
 
-免费临时邮箱服务，极速接收验证码和登录链接。
+一个完全免费、可自托管的临时邮箱服务。用户可以随机生成邮箱地址，实时接收验证邮件，自动提取验证码和激活链接。
 
-- **技术栈**: Next.js + Tailwind CSS + Cloudflare Workers + D1
-- **部署**: 前端 Vercel，后端 Cloudflare Workers（全免费）
-- **功能**: 随机生成邮箱、实时收信、自动提取验证码和链接、一键复制
+**技术栈**：Next.js 前端 + Cloudflare Workers 后端 + Cloudflare D1 数据库
+
+**托管费用**：全部使用免费套餐，零成本运行。
+
+---
+
+## 目录
+
+- [功能介绍](#功能介绍)
+- [架构总览](#架构总览)
+- [前置条件](#前置条件)
+- [部署步骤](#部署步骤)
+  - [第一步：克隆代码并安装依赖](#第一步克隆代码并安装依赖)
+  - [第二步：部署后端 Worker](#第二步部署后端-worker)
+  - [第三步：配置域名收信](#第三步配置域名收信)
+  - [第四步：部署前端到 Vercel](#第四步部署前端到-vercel)
+  - [第五步：连通前后端](#第五步连通前后端)
+  - [第六步：管理员面板初始配置](#第六步管理员面板初始配置)
+- [（可选）Landing Worker](#可选landing-worker)
+- [（可选）Warmup Worker](#可选warmup-worker)
+- [本地开发](#本地开发)
+- [项目结构](#项目结构)
+- [常见问题](#常见问题)
+
+---
+
+## 功能介绍
+
+- **随机生成临时邮箱** — 一键生成随机用户名，选择域名，即得一个可用邮箱地址
+- **实时收信** — 轮询刷新，邮件几秒内可见
+- **自动提取链接/验证码** — 正则匹配邮件正文，提取激活链接和验证码，一键复制
+- **密码管理器** — 记录每个临时邮箱生成的密码，管理账号池
+- **标签分组（Tag）** — 给邮箱打标签，批量管理同类账号
+- **转发规则** — 指定子域名的来信自动转发到你的真实邮箱
+- **管理员面板** — 在线管理域名列表、转发规则、自动清理周期、站点密码等
+- **访问密码** — 可为网站设置访问密码，防止陌生人使用
+- **自动清理** — 定时删除过期邮件，避免数据库膨胀
+
+---
+
+## 架构总览
+
+```
+用户浏览器
+    │
+    ▼
+Next.js 前端（Vercel）
+    │  API 请求
+    ▼
+Cloudflare Worker（后端 API）
+    │
+    ├── Cloudflare D1（SQLite 数据库）
+    │     ├── emails 表（收到的邮件）
+    │     ├── passwords 表（账号密码记录）
+    │     └── config 表（站点配置）
+    │
+    └── Cloudflare Email Routing
+          └── 收到发往你域名的邮件 → 触发 Worker → 写入 D1
+```
+
+共有 3 个 Worker（分布在不同目录）：
+
+| 目录 | 名称 | 作用 |
+|------|------|------|
+| `worker/` | `temp-mail-worker` | 核心：处理收信 + 提供 API |
+| `landing-worker/` | `landing-worker` | 可选：为每个收信域名提供一个简单落地页 |
+| `warmup-worker/` | `warmup-worker` | 可选：每天定时发一封邮件，防止 Worker 冷启动过慢 |
+
+---
+
+## 前置条件
+
+在开始之前，你需要准备：
+
+1. **一个域名**（如 `yourdomain.top`），用于接收邮件。可在 Namecheap、Porkbun 等平台购买，一般 $1–5/年。
+2. **Cloudflare 账号**（免费）— [注册地址](https://dash.cloudflare.com/sign-up)
+3. **Vercel 账号**（免费）— [注册地址](https://vercel.com)
+4. **GitHub 账号**（免费）— 用于连接 Vercel 自动部署
+5. **本地安装 Node.js 18+** — [下载地址](https://nodejs.org)（安装后在终端运行 `node -v` 确认版本）
 
 ---
 
 ## 部署步骤
 
-### 前置条件
+### 第一步：克隆代码并安装依赖
 
-1. 一个域名（如 `yourdomain.top`）
-2. [Cloudflare 账号](https://dash.cloudflare.com/sign-up)（免费）
-3. [Vercel 账号](https://vercel.com)（免费）
-4. 安装 Node.js 18+
+```bash
+# 克隆仓库
+git clone https://github.com/你的用户名/temp-mail.git
+cd temp-mail
+
+# 安装前端依赖
+npm install
+
+# 安装 Worker 依赖
+cd worker && npm install && cd ..
+```
 
 ---
 
-### 第一步：配置 Cloudflare
+### 第二步：部署后端 Worker
 
-#### 1.1 添加域名到 Cloudflare
+后端 Worker 负责接收邮件和提供 API，是整个系统的核心。
 
-1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com)
-2. 点击 "Add a site"，输入你的域名
-3. 选择 **Free** 计划
-4. 按提示修改域名的 NS 记录指向 Cloudflare
-
-#### 1.2 开启 Email Routing
-
-1. 进入域名管理页 → **Email** → **Email Routing**
-2. 点击 "Get started"，按提示添加 DNS 记录
-3. 在 **Routing rules** 中添加 **Catch-all** 规则：
-   - Action: **Send to a Worker**
-   - Destination: `temp-mail-worker`（先完成 1.3 部署 Worker 后再设置）
-
-#### 1.3 部署 Cloudflare Worker
+#### 2.1 登录 Cloudflare CLI
 
 ```bash
-# 进入 worker 目录
 cd worker
-
-# 安装依赖
-npm install
-
-# 登录 Cloudflare
 npx wrangler login
+```
 
-# 创建 D1 数据库
+浏览器会弹出 Cloudflare 登录页面，授权后返回终端即可。
+
+#### 2.2 创建 D1 数据库
+
+```bash
 npm run db:create
-# 输出会包含 database_id，复制它
+```
 
-# 编辑 wrangler.toml，替换以下值：
-# - database_id: 上面创建的 ID
-# - ALLOWED_DOMAINS: 你的临时邮箱域名（逗号分隔）
-# - ALLOWED_ORIGINS: 你的 Vercel 部署地址
-# - FORWARD_RULES: 转发子域名规则（见下方说明）
+命令成功后，终端会输出类似以下内容：
 
-# 初始化数据库表
+```
+✅ Successfully created DB 'temp-mail-db'
+Created your new D1 database.
+
+{
+  "uuid": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",   ← 复制这个 ID
+  "name": "temp-mail-db"
+}
+```
+
+**复制并保存这个 `uuid`（database_id）**，下一步需要填入配置文件。
+
+#### 2.3 修改 Worker 配置文件
+
+用文本编辑器打开 `worker/wrangler.toml`，修改以下字段：
+
+```toml
+name = "temp-mail-worker"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+workers_dev = true
+account_id = "你的 Cloudflare 账号 ID"   # ← 在 Cloudflare Dashboard 右上角找到
+
+[[d1_databases]]
+binding = "DB"
+database_name = "temp-mail-db"
+database_id = "上一步复制的 database_id"  # ← 粘贴到这里
+
+[vars]
+# 允许跨域的前端地址（先填占位符，部署完 Vercel 后回来改）
+ALLOWED_ORIGINS = "http://localhost:3000"
+# 管理员密码（自己设一个强密码）
+ADMIN_PASSWORD = "你的管理员密码"
+```
+
+> **如何找到 Cloudflare 账号 ID**：登录 [Cloudflare Dashboard](https://dash.cloudflare.com)，点击右上角头像 → "My Profile"，或在任意域名页面右侧栏找到 "Account ID"。
+
+#### 2.4 初始化数据库表结构
+
+```bash
 npm run db:init
+```
 
-# 部署 Worker
+这会在 D1 中创建 `emails`、`passwords`、`config` 三张表。
+
+#### 2.5 部署 Worker
+
+```bash
 npm run deploy
 ```
 
-部署成功后会输出 Worker URL，类似：
-`https://temp-mail-worker.your-account.workers.dev`
+部署成功后，终端输出类似：
 
-#### 1.4 设置 Email Routing Catch-all
+```
+✨ Worker deployed to: https://temp-mail-worker.你的账号.workers.dev
+```
 
-回到 Cloudflare Dashboard → Email → Email Routing → Routing rules：
-- 编辑 Catch-all 规则
-- Action: **Send to a Worker**
-- Worker: 选择 `temp-mail-worker`
+**保存这个 URL**，后面前端配置会用到。
 
-> **子域名也需要单独设置 Email Routing**：如果你用了转发子域名（如 `fwd.example.com`），需要在 Cloudflare 中为该子域名也开启 Email Routing 并设置 Catch-all 指向同一个 Worker。
+---
 
-#### 1.5 （可选）配置子域名邮件转发到 Gmail
+### 第三步：配置域名收信
 
-你可以指定某个子域名下收到的所有邮件**自动转发到你的 Gmail**，同时也保存到网页端。
+让 Cloudflare 接管你域名的邮件，并将来信转交给 Worker 处理。
 
-编辑 `worker/wrangler.toml` 中的 `FORWARD_RULES`：
+#### 3.1 将域名添加到 Cloudflare
+
+1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com)
+2. 点击 "Add a site"，输入你的域名（如 `yourdomain.top`）
+3. 选择 **Free** 套餐
+4. Cloudflare 会给你两个 Nameserver 地址（如 `ara.ns.cloudflare.com`），记下来
+5. 去你购买域名的平台（Namecheap 等），将域名的 NS 记录改为 Cloudflare 提供的地址
+6. 等待 DNS 生效（通常 5–30 分钟，最长 48 小时）
+
+#### 3.2 开启 Email Routing
+
+1. 在 Cloudflare Dashboard 中点击你的域名
+2. 左侧菜单选择 **Email** → **Email Routing**
+3. 点击 "Get started"，按提示操作（Cloudflare 会自动添加必要的 MX 和 TXT 记录）
+4. 开启状态变为 "Enabled" 即可
+
+#### 3.3 添加 Catch-all 规则
+
+在 Email Routing 页面的 **Routing rules** 部分：
+
+1. 找到 "Catch-all address" 一行
+2. 点击编辑，设置：
+   - **Action**：`Send to a Worker`
+   - **Worker**：选择 `temp-mail-worker`
+3. 保存
+
+这样，所有发往 `任意用户名@yourdomain.top` 的邮件都会触发你的 Worker。
+
+---
+
+### 第四步：部署前端到 Vercel
+
+#### 4.1 推送代码到 GitHub
+
+在项目根目录（`temp-mail/`）创建一个 GitHub 仓库并推送：
+
+```bash
+git remote add origin https://github.com/你的用户名/temp-mail.git
+git push -u origin main
+```
+
+#### 4.2 在 Vercel 导入项目
+
+1. 登录 [Vercel](https://vercel.com)，点击 "New Project"
+2. 选择你的 GitHub 仓库
+3. Framework 会自动识别为 **Next.js**，无需修改
+4. 展开 **Environment Variables**，添加：
+
+| 变量名 | 值 |
+|--------|-----|
+| `NEXT_PUBLIC_WORKER_URL` | `https://temp-mail-worker.你的账号.workers.dev` |
+
+5. 点击 "Deploy"，等待部署完成（约 1–2 分钟）
+6. 部署成功后记下 Vercel 给的域名，如 `temp-mail-xxx.vercel.app`
+
+---
+
+### 第五步：连通前后端
+
+现在前端已部署，需要将 Vercel 地址填回 Worker 的 CORS 配置。
+
+#### 5.1 更新 Worker 的 ALLOWED_ORIGINS
+
+打开 `worker/wrangler.toml`，更新 `ALLOWED_ORIGINS`：
 
 ```toml
-# 格式: "子域名:目标邮箱"，多条规则用逗号分隔
-FORWARD_RULES = "fwd.example.com:yourname@gmail.com,fwd.domain2.top:other@gmail.com"
+[vars]
+ALLOWED_ORIGINS = "https://temp-mail-xxx.vercel.app,http://localhost:3000"
+# 如果 Vercel 给了多个预览地址，全部加进来，用英文逗号分隔
 ```
 
-**工作流程**：
-```
-发件人 → xxx@fwd.example.com
-              ↓
-        Cloudflare Worker
-         ↙          ↘
-   转发到 Gmail    存入 D1（网页也能看）
-```
+#### 5.2 重新部署 Worker
 
-**Cloudflare 端设置**：
-1. 在 DNS 中为子域名 `fwd` 添加 Email Routing 需要的 MX 记录
-2. 在 Email Routing → Routing rules 中为 `fwd.example.com` 也设置 Catch-all → Worker
-3. 在 Email Routing → Destination addresses 中添加并验证你的 Gmail 地址（Cloudflare 会发一封确认邮件）
+```bash
+cd worker
+npm run deploy
+```
 
 ---
 
-### 第二步：部署前端到 Vercel
+### 第六步：管理员面板初始配置
 
-#### 2.1 修改配置
+访问你的 Vercel 站点，在 URL 后加 `/admin`（如 `https://temp-mail-xxx.vercel.app/admin`）。
 
-编辑项目根目录的 `.env.local`：
+1. 输入你在 `wrangler.toml` 中设置的 `ADMIN_PASSWORD`，登录
+2. 在 **域名列表** 中添加你的收信域名（如 `yourdomain.top`）
+3. 根据需要配置：
+   - **站点名称**：显示在页面顶部的名称
+   - **自动清理周期**：邮件保留多少小时后自动删除（默认 24）
+   - **站点访问密码**：为整个网站设置密码（留空则无密码）
+   - **转发规则**：指定某个子域名收到的邮件转发到你的真实邮箱
+   - **标签规则（Tag Rules）**：定义标签名和对应的转发目标
 
-```env
-NEXT_PUBLIC_DOMAINS=yourdomain.top
-NEXT_PUBLIC_WORKER_URL=https://temp-mail-worker.your-account.workers.dev
-```
+配置完成后点击 **保存配置**。
 
-#### 2.2 部署到 Vercel
-
-1. 将项目推送到 GitHub
-2. 登录 [Vercel](https://vercel.com)
-3. Import 你的 GitHub 仓库
-4. 在 Environment Variables 中添加：
-   - `NEXT_PUBLIC_DOMAINS` = `yourdomain.top`
-   - `NEXT_PUBLIC_WORKER_URL` = `https://temp-mail-worker.your-account.workers.dev`
-5. 点击 Deploy
-
-#### 2.3 （可选）绑定自定义域名
-
-在 Vercel 项目设置 → Domains 中添加你的域名（如 `mail.yourdomain.top`）
+回到首页，即可正常使用临时邮箱。
 
 ---
 
-### 第三步：验证
+## （可选）Landing Worker
 
-1. 访问你的 Vercel 站点
-2. 复制生成的临时邮箱地址
-3. 用该地址去注册某个服务
-4. 等待邮件出现，点击展开查看提取的链接和验证码
+`landing-worker/` 目录包含一个 Worker，访问你的收信域名时会显示一个简单的落地页（而不是 Cloudflare 的默认报错页面）。
+
+#### 部署步骤
+
+```bash
+cd landing-worker
+npm install
+
+# 编辑 wrangler.toml：
+# 1. 将 account_id 改为你的 Cloudflare 账号 ID
+# 2. 将 routes 中的域名改为你自己的收信域名
+
+npx wrangler deploy --config landing-worker/wrangler.toml
+```
+
+---
+
+## （可选）Warmup Worker
+
+`warmup-worker/` 目录包含一个每天定时运行的 Worker，向指定邮箱发一封邮件，目的是让整个系统保持活跃，避免冷启动延迟。
+
+#### 部署步骤
+
+```bash
+cd warmup-worker
+npm install
+
+# 编辑 wrangler.toml：
+# 1. 将 account_id 改为你的 Cloudflare 账号 ID
+# 2. 将 TARGET_EMAIL 改为你自己的常用邮箱
+
+npx wrangler deploy
+```
 
 ---
 
 ## 本地开发
 
-```bash
-# 前端
-npm install
-npm run dev
+在本地调试时，需要同时启动前端和 Worker：
 
-# Worker（新终端）
-cd worker
+```bash
+# 终端 1：启动前端
 npm install
 npm run dev
+# 前端运行在 http://localhost:3000
+
+# 终端 2：启动 Worker（使用本地 D1 数据库）
+cd worker
+npm run dev
+# Worker 运行在 http://localhost:8787
 ```
 
-本地开发时，前端默认运行在 `http://localhost:3000`，Worker 运行在 `http://localhost:8787`。
+本地开发时，编辑项目根目录的 `.env.local`：
 
-修改 `.env.local` 中的 `NEXT_PUBLIC_WORKER_URL` 为 `http://localhost:8787`。
+```env
+NEXT_PUBLIC_WORKER_URL=http://localhost:8787
+```
+
+本地 Worker 使用本地 D1（不影响线上数据库），首次运行本地 Worker 前需初始化本地数据库：
+
+```bash
+cd worker
+npm run db:init-local
+```
 
 ---
 
@@ -164,19 +361,57 @@ npm run dev
 ```
 temp-mail/
 ├── src/
-│   ├── app/
-│   │   ├── layout.tsx      # 页面布局
-│   │   ├── page.tsx        # 主页面
-│   │   └── globals.css     # 全局样式
-│   └── lib/
-│       ├── config.ts       # 配置
-│       ├── types.ts        # 类型定义
-│       └── utils.ts        # 工具函数
+│   └── app/
+│       ├── page.tsx          # 主页：临时邮箱收信
+│       ├── accounts/         # 账号管理页（密码管理器）
+│       ├── admin/            # 管理员面板
+│       └── globals.css
 ├── worker/
-│   ├── src/index.ts        # Cloudflare Worker
-│   ├── schema.sql          # D1 数据库表结构
-│   ├── wrangler.toml       # Worker 配置
+│   ├── src/index.ts          # 核心 Worker：收信 + API
+│   ├── schema.sql            # D1 数据库建表语句
+│   ├── wrangler.toml         # Worker 配置（需修改）
 │   └── package.json
-├── .env.local              # 环境变量（本地）
+├── landing-worker/           # 可选：收信域名落地页
+├── warmup-worker/            # 可选：定时热身 Worker
+├── .env.local                # 前端环境变量（本地）
+├── wrangler.jsonc            # 前端 Cloudflare Pages 配置（备用）
 └── package.json
 ```
+
+---
+
+## 常见问题
+
+**Q：发了邮件但网页上没有收到？**
+
+先确认以下几点：
+1. Cloudflare Email Routing 是否已开启（状态为 Enabled）
+2. Catch-all 规则是否已设置为 Send to Worker
+3. 管理员面板中域名列表是否已添加该域名
+4. Worker 是否部署成功（访问 `https://temp-mail-worker.你的账号.workers.dev/api/config` 应返回 JSON）
+
+**Q：网页报错 "invalid domain"？**
+
+管理员面板 `/admin` 中，确保已将你的域名加入域名列表并保存。
+
+**Q：网页报错 CORS 或网络请求失败？**
+
+确认 `worker/wrangler.toml` 中的 `ALLOWED_ORIGINS` 包含你的 Vercel 域名，且重新部署了 Worker（`npm run deploy`）。
+
+**Q：Cloudflare 的免费套餐有什么限制？**
+
+- Workers 免费版：每天 100,000 次请求，通常足够个人使用
+- D1 免费版：5 GB 存储，500 万行读取/天
+- Email Routing：免费，无限制
+
+**Q：能不能用多个域名同时接收邮件？**
+
+可以。每个域名在 Cloudflare 都需要单独开启 Email Routing 并设置 Catch-all 规则指向同一个 Worker。然后在管理员面板的域名列表中添加所有域名即可。
+
+**Q：如何设置某个子域名的邮件转发到 Gmail？**
+
+在管理员面板 → **转发规则** 中添加：
+- 子域名：`fwd.yourdomain.top`（仅填子域名完整地址）
+- 转发目标：`yourname@gmail.com`
+
+同时需要在 Cloudflare Email Routing 的 **Destination addresses** 中验证你的 Gmail 地址，并为该子域名也配置 Email Routing Catch-all 规则。
