@@ -15,5 +15,5 @@ crons = ["0 3 * * *"]
 
 [vars]
 # Comma-separated list of allowed frontend origins (for CORS)
-ALLOWED_ORIGINS = "https://temp-mail-one-nu.vercel.app,https://temp-mail-nine-nu.vercel.app,https://temp-mail-83oxnvzp7-kaylamartinez200221-6476s-projects.vercel.app,http://localhost:3000"
+ALLOWED_ORIGINS = "https://temp-mail-nine-nu.vercel.app,https://temp-mail-83oxnvzp7-kaylamartinez200221-6476s-projects.vercel.app,http://localhost:3000"
 ADMIN_PASSWORD = "TempMail@2026!"

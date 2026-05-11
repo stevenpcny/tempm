@@ -37,8 +37,6 @@
   ],
   "exclude": [
     "node_modules",
-    "worker",
-    "warmup-worker",
-    "landing-worker"
+    "worker"
   ]
 }

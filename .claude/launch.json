@@ -3,9 +3,8 @@
   "configurations": [
     {
       "name": "nextjs-dev",
-      "runtimeExecutable": "/bin/bash",
-      "runtimeArgs": ["-c", "PATH=/usr/local/bin:$PATH exec npm run dev"],
-      "cwd": ".",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
       "port": 3000
     }
   ]
