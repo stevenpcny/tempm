@@ -60,7 +60,7 @@ function isSpamEmail(subject: string): boolean {
 }
 
 // ── Generate Email Panel (per-tag address generator) ───────────────────────
-function GenerateEmailPanel({ tag, allDomains, adminToken }: { tag: string; allDomains: string[]; adminToken: string }) {
+function GenerateEmailPanel({ tag, allDomains, adminToken, sseDisabled }: { tag: string; allDomains: string[]; adminToken: string; sseDisabled?: boolean }) {
   const [domainQuotas, setDomainQuotas] = useState<Record<string, { used: number; limit: number; hourlyUsed: number; hourlyLimit: number }>>({});
   const [tagQuota, setTagQuota] = useState<{ used: number; limit: number; remaining: number } | null>(null);
   const [generated, setGenerated] = useState("");
@@ -179,7 +179,7 @@ function GenerateEmailPanel({ tag, allDomains, adminToken }: { tag: string; allD
   const allDomainsFull = quotasLoaded && allDomains.length > 0 && allDomains
     .filter(d => enabledDomains.has(d))
     .every(d => { const q = domainQuotas[d]; return !q || q.used >= q.limit || q.hourlyUsed >= q.hourlyLimit; });
-  const disabled = !poolReady || !quotasLoaded || allDomainsFull;
+  const disabled = !poolReady || !quotasLoaded || allDomainsFull || !!sseDisabled;
 
   return (
     <div className="card mb-4" style={{ borderLeft: "3px solid #4caf50" }}>
@@ -208,7 +208,7 @@ function GenerateEmailPanel({ tag, allDomains, adminToken }: { tag: string; allD
             whiteSpace: "nowrap",
           }}
         >
-          {!quotasLoaded ? "⏳ 加载中..." : allDomainsFull ? "域名配额已满" : "🎲 随机生成"}
+          {!quotasLoaded ? "⏳ 加载中..." : sseDisabled ? "⚠️ 连接断开中" : allDomainsFull ? "域名配额已满" : "🎲 随机生成"}
         </button>
         <button
           onClick={() => { loadDomainQuotas(allDomains); loadTagQuota(); }}
@@ -402,28 +402,38 @@ function EmailPanel({ address, onClose }: { address: string; onClose: () => void
   );
 }
 
-const POLL_INTERVAL_MS = 5_000;  // 5 seconds between polls
-const FIRST_POLL_DELAY_MS = 8_000; // first poll after 8 seconds
-const AUTO_REFRESH_DURATION_MS = 60_000; // auto-refresh lasts 60 seconds
-
 // ── TagEmailsPanel (all emails for all addresses under a tag) ───────────────
 interface TagEmailMeta { id: string; to: string; from: string; subject: string; timestamp: number; toAddress: string; activationLink: string | null; }
 
-function TagEmailsPanel({ tag }: { tag: string }) {
+function TagEmailsPanel({ tag, onConnStateChange }: { tag: string; onConnStateChange?: (connected: boolean) => void }) {
   const [allEmails, setAllEmails] = useState<TagEmailMeta[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(true);
-  const [autoRefresh, setAutoRefresh] = useState(false);
-  const [refreshExpired, setRefreshExpired] = useState(false);
+  const [connState, setConnState] = useState<"connecting" | "connected" | "reconnecting">("connecting");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [open, setOpen] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [contentExpandedId, setContentExpandedId] = useState<string | null>(null);
   const [emailDetail, setEmailDetail] = useState<Record<string, { html: string; text: string }>>({});
   const [detailLoading, setDetailLoading] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const pollRef = useRef<NodeJS.Timeout | null>(null);
-  const stopTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const firstPollRef = useRef<NodeJS.Timeout | null>(null);
+  const [usedIds, setUsedIds] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      const s = localStorage.getItem("usedEmailIds");
+      return new Set(s ? JSON.parse(s) as string[] : []);
+    } catch { return new Set(); }
+  });
+
+  const lastTsRef = useRef(Date.now());
+  const esRef = useRef<EventSource | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelledRef = useRef(false);
+  const onConnStateChangeRef = useRef(onConnStateChange);
+  useEffect(() => { onConnStateChangeRef.current = onConnStateChange; }, [onConnStateChange]);
+
+  useEffect(() => {
+    if (connState === "connecting") return;
+    onConnStateChangeRef.current?.(connState === "connected");
+  }, [connState]);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
   const copy = async (text: string, label = "已复制") => {
@@ -431,19 +441,15 @@ function TagEmailsPanel({ tag }: { tag: string }) {
     catch { showToast("❌ 复制失败"); }
   };
 
-  // List only — no html/text body, fast and lightweight
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${WORKER_URL}/api/tag-emails?tag=${encodeURIComponent(tag)}`, { cache: "no-store" });
-      if (!res.ok) return;
-      const d = await res.json() as { emails: { id: string; to: string; from: string; subject: string; timestamp: number; activationLink: string | null }[] };
-      setAllEmails((d.emails || []).map(e => ({ ...e, toAddress: e.to })));
-      setLastUpdated(new Date());
-    } finally { setLoading(false); }
-  }, [tag]);
+  const markUsed = useCallback((id: string) => {
+    setUsedIds(prev => {
+      const next = new Set(prev);
+      next.add(id);
+      try { localStorage.setItem("usedEmailIds", JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  }, []);
 
-  // Load full email content on demand
   const loadDetail = useCallback(async (id: string) => {
     if (emailDetail[id]) return;
     setDetailLoading(id);
@@ -455,80 +461,100 @@ function TagEmailsPanel({ tag }: { tag: string }) {
     } finally { setDetailLoading(null); }
   }, [emailDetail]);
 
-  const clearAllTimers = useCallback(() => {
-    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-    if (stopTimerRef.current) { clearTimeout(stopTimerRef.current); stopTimerRef.current = null; }
-    if (firstPollRef.current) { clearTimeout(firstPollRef.current); firstPollRef.current = null; }
-  }, []);
+  const manualRefresh = useCallback(async () => {
+    try {
+      const res = await fetch(`${WORKER_URL}/api/tag-emails?tag=${encodeURIComponent(tag)}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const d = await res.json() as { emails: Array<{ id: string; to: string; from: string; subject: string; timestamp: number; activationLink: string | null }> };
+      const emails = (d.emails || []).map(e => ({ ...e, toAddress: e.to }));
+      setAllEmails(emails);
+      setLastUpdated(new Date());
+      if (emails.length > 0) {
+        const maxTs = Math.max(...emails.map(e => e.timestamp));
+        if (maxTs > lastTsRef.current) lastTsRef.current = maxTs;
+      }
+    } catch {}
+  }, [tag]);
 
-  const stopAutoRefresh = useCallback((expired = false) => {
-    clearAllTimers();
-    setAutoRefresh(false);
-    if (expired) setRefreshExpired(true);
-  }, [clearAllTimers]);
-
-  const startAutoRefresh = useCallback(() => {
-    clearAllTimers();
-    setRefreshExpired(false);
-    setAutoRefresh(true);
-    // First poll after 8 seconds, then every 5 seconds
-    firstPollRef.current = setTimeout(() => {
-      load();
-      pollRef.current = setInterval(load, POLL_INTERVAL_MS);
-    }, FIRST_POLL_DELAY_MS);
-    // Auto-stop after 60 seconds
-    stopTimerRef.current = setTimeout(() => stopAutoRefresh(true), AUTO_REFRESH_DURATION_MS);
-  }, [load, clearAllTimers, stopAutoRefresh]);
-
-  // Auto-start on mount: load immediately + start auto-refresh
+  // SSE setup: initial fetch to get existing emails, then persistent push connection
   useEffect(() => {
-    load();
-    startAutoRefresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    cancelledRef.current = false;
+    lastTsRef.current = Date.now();
 
-  // Clean up on unmount or when panel closes
-  useEffect(() => {
-    if (!open) { clearAllTimers(); setAutoRefresh(false); }
-    return () => clearAllTimers();
-  }, [open, clearAllTimers]);
+    const connect = () => {
+      if (cancelledRef.current) return;
+      const es = new EventSource(`${WORKER_URL}/api/stream?tag=${encodeURIComponent(tag)}&since=${lastTsRef.current}`);
+      esRef.current = es;
 
-  const toggle = () => {
-    if (!open) { load(); startAutoRefresh(); }
-    setOpen(o => !o);
-  };
+      es.onopen = () => {
+        if (!cancelledRef.current) setConnState("connected");
+      };
+
+      es.onmessage = (event) => {
+        if (cancelledRef.current) return;
+        try {
+          const data = JSON.parse(event.data) as { type: string; email?: { id: string; to: string; from: string; subject: string; timestamp: number; activationLink: string | null } };
+          if (data.type === "email" && data.email) {
+            const email: TagEmailMeta = { ...data.email, toAddress: data.email.to };
+            setAllEmails(prev => prev.find(e => e.id === email.id) ? prev : [email, ...prev]);
+            if (data.email.timestamp > lastTsRef.current) lastTsRef.current = data.email.timestamp;
+            setLastUpdated(new Date());
+          } else if (data.type === "ping" || data.type === "connected") {
+            setLastUpdated(new Date());
+          }
+        } catch {}
+      };
+
+      es.onerror = () => {
+        if (cancelledRef.current) return;
+        setConnState("reconnecting");
+        es.close();
+        esRef.current = null;
+        reconnectTimerRef.current = setTimeout(connect, 3000);
+      };
+    };
+
+    fetch(`${WORKER_URL}/api/tag-emails?tag=${encodeURIComponent(tag)}`, { cache: "no-store" })
+      .then(r => r.json())
+      .then((d: { emails: Array<{ id: string; to: string; from: string; subject: string; timestamp: number; activationLink: string | null }> }) => {
+        if (cancelledRef.current) return;
+        const emails = (d.emails || []).map(e => ({ ...e, toAddress: e.to }));
+        setAllEmails(emails);
+        setLastUpdated(new Date());
+        if (emails.length > 0) lastTsRef.current = Math.max(...emails.map(e => e.timestamp));
+        connect();
+      })
+      .catch(() => { if (!cancelledRef.current) connect(); });
+
+    return () => {
+      cancelledRef.current = true;
+      esRef.current?.close();
+      esRef.current = null;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    };
+  }, [tag]);
 
   return (
     <div className="card mb-6" style={{ borderLeft: "3px solid var(--primary)" }}>
       {toast && <div className="toast">{toast}</div>}
-      <div className="flex items-center justify-between cursor-pointer" onClick={toggle}>
+      <div className="flex items-center justify-between cursor-pointer" onClick={() => setOpen(o => !o)}>
         <span className="font-semibold text-sm" style={{ color: "var(--primary)" }}>
           📨 -{tag} 全部收件
-          {!loading && allEmails.length > 0 && open && (
-            <span className="badge ml-1">{allEmails.length}</span>
-          )}
+          {allEmails.length > 0 && open && <span className="badge ml-1">{allEmails.length}</span>}
         </span>
         <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
           {open && (
             <>
-              {/* Auto-refresh toggle */}
-              <button
-                onClick={() => autoRefresh ? stopAutoRefresh() : startAutoRefresh()}
-                className="text-xs px-2 py-0.5 rounded-lg font-medium transition-colors"
-                style={{
-                  background: autoRefresh ? "var(--primary)" : refreshExpired ? "#f59e0b" : "var(--primary-light)",
-                  color: autoRefresh ? "white" : refreshExpired ? "white" : "var(--primary-dark)",
-                }}
-                title={autoRefresh ? "点击停止" : "开启自动刷新（持续60秒）"}
-              >
-                {autoRefresh ? "⏱ 自动刷新中" : refreshExpired ? "⏱ 点击继续刷新" : "⏱ 自动刷新"}
-              </button>
+              {connState === "connected"
+                ? <span style={{ color: "#22c55e", fontSize: 10 }}>● 实时监听中</span>
+                : <span style={{ color: "#f59e0b", fontSize: 10 }}>◌ 重连中...</span>
+              }
               {lastUpdated && (
                 <span className="text-xs text-gray-400">
                   {lastUpdated.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                 </span>
               )}
-              <button onClick={load} className="text-xs text-gray-400 hover:text-gray-600" title="立即刷新">🔄</button>
+              <button onClick={manualRefresh} className="text-xs text-gray-400 hover:text-gray-600" title="立即刷新">🔄</button>
             </>
           )}
           <span className="text-xs text-gray-400">{open ? "▲" : "▼"}</span>
@@ -537,29 +563,38 @@ function TagEmailsPanel({ tag }: { tag: string }) {
 
       {open && (
         <div className="mt-3 rounded-xl border overflow-hidden" style={{ borderColor: "var(--primary-light)" }}>
-          {loading && <p className="text-center text-gray-400 py-4 text-sm">加载中...</p>}
-          {!loading && allEmails.length === 0 && <p className="text-center text-gray-400 py-4 text-sm">暂无邮件</p>}
+          {allEmails.length === 0 && (
+            <p className="text-center text-gray-400 py-4 text-sm">
+              {connState === "connecting" ? "连接中..." : "暂无邮件，实时等待中..."}
+            </p>
+          )}
 
           {allEmails.filter(e => !isSpamEmail(e.subject || "")).map((email) => {
             const isOpen = expandedId === email.id;
             const detail = emailDetail[email.id];
+            const isUsed = usedIds.has(email.id);
             return (
-              <div key={email.id} className="border-b last:border-b-0" style={{ borderColor: "var(--primary-light)", background: "#f8faff" }}>
+              <div key={email.id} className="border-b last:border-b-0"
+                style={{ borderColor: "var(--primary-light)", background: isUsed ? "#f5f5f5" : "#f8faff" }}>
                 <div className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-white transition-colors"
+                  style={{ opacity: isUsed ? 0.65 : 1 }}
                   onClick={() => { const next = isOpen ? null : email.id; setExpandedId(next); if (next) loadDetail(email.id); }}>
                   <span className="text-xs text-gray-400">{isOpen ? "▼" : "▶"}</span>
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold truncate text-gray-700">{email.subject || "(无主题)"}</div>
+                    <div className="text-xs font-semibold truncate text-gray-700">
+                      {email.subject || "(无主题)"}
+                      {isUsed && <span className="ml-2 text-gray-400 font-normal">已使用</span>}
+                    </div>
                     <div className="text-xs text-gray-400 truncate">
                       {email.toAddress} · {formatTime(email.timestamp)}
                     </div>
                   </div>
                   {email.activationLink && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); copy(email.activationLink!, "激活链接已复制"); }}
+                      onClick={(e) => { e.stopPropagation(); copy(email.activationLink!, "激活链接已复制"); markUsed(email.id); }}
                       className="text-xs px-2 py-1 rounded shrink-0 font-medium"
-                      style={{ background: "var(--primary)", color: "white" }}>
-                      一键复制激活链接
+                      style={{ background: isUsed ? "#9ca3af" : "var(--primary)", color: "white" }}>
+                      {isUsed ? "✓ 已使用" : "一键复制激活链接"}
                     </button>
                   )}
                 </div>
@@ -571,8 +606,13 @@ function TagEmailsPanel({ tag }: { tag: string }) {
                       <div className="mb-2">
                         <div className="text-xs font-semibold mb-1" style={{ color: "var(--primary)" }}>🔑 激活链接</div>
                         <div className="flex items-center gap-1 mb-1">
-                          <span className="text-xs text-blue-600 truncate flex-1 font-mono">{email.activationLink}</span>
-                          <button onClick={() => copy(email.activationLink!, "激活链接已复制")}
+                          <span
+                            className="text-xs text-blue-600 truncate flex-1 font-mono"
+                            draggable
+                            onDragStart={() => markUsed(email.id)}
+                          >{email.activationLink}</span>
+                          <button
+                            onClick={() => { copy(email.activationLink!, "激活链接已复制"); markUsed(email.id); }}
                             className="text-xs px-2 py-0.5 rounded shrink-0 font-medium"
                             style={{ background: "var(--primary)", color: "white" }}>复制</button>
                         </div>
@@ -632,6 +672,11 @@ export default function Home() {
   const [toast,      setToast]      = useState<string | null>(null);
   const [revealed,   setRevealed]   = useState<Record<string, boolean>>({});
   const [expanded,   setExpanded]   = useState<Record<string, boolean>>({});
+  const [sseConnected, setSseConnected] = useState(true);
+
+  useEffect(() => {
+    if (activeTag === "all") setSseConnected(true);
+  }, [activeTag]);
 
   useEffect(() => {
     const saved = sessionStorage.getItem("accounts_admin_token");
@@ -761,6 +806,12 @@ export default function Home() {
   return (
     <div className="min-h-screen" style={{ background: "var(--bg)" }}>
       {toast && <div className="toast">{toast}</div>}
+      {activeTag !== "all" && !sseConnected && (
+        <div className="fixed top-0 left-0 right-0 z-50 text-center py-2.5 text-sm font-medium text-white"
+          style={{ background: "#dc2626" }}>
+          ⚠️ 连接已断开，正在重连中… 请勿生成新邮箱
+        </div>
+      )}
 
       <div className="max-w-2xl mx-auto px-4 py-8">
         <div className="flex items-center justify-between mb-6">
@@ -786,8 +837,8 @@ export default function Home() {
         {/* Per-tag panels (non-"all" tabs only) */}
         {activeTag !== "all" && (
           <>
-            <GenerateEmailPanel key={`gen-${activeTag}`} tag={activeTag} allDomains={allDomains} adminToken={adminToken} />
-            <TagEmailsPanel key={`inbox-${activeTag}`} tag={activeTag} />
+            <GenerateEmailPanel key={`gen-${activeTag}`} tag={activeTag} allDomains={allDomains} adminToken={adminToken} sseDisabled={!sseConnected} />
+            <TagEmailsPanel key={`inbox-${activeTag}`} tag={activeTag} onConnStateChange={setSseConnected} />
           </>
         )}
 

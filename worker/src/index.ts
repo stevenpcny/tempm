@@ -609,6 +609,72 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     return Response.json({ ok: true }, { headers });
   }
 
+  // GET /api/stream?tag=xxx&since=timestamp — SSE push for new emails
+  if (url.pathname === "/api/stream" && request.method === "GET") {
+    const tag = (url.searchParams.get("tag") || "").toLowerCase();
+    if (!tag) return Response.json({ error: "tag required" }, { status: 400, headers });
+
+    const since = parseInt(url.searchParams.get("since") || "0") || (Date.now() - 5000);
+    const encoder = new TextEncoder();
+    let closed = false;
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        let lastTs = since;
+
+        const send = (data: object): boolean => {
+          if (closed) return false;
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+            return true;
+          } catch { closed = true; return false; }
+        };
+
+        if (!send({ type: "connected" })) return;
+        const linkFilter = await getConfig(env.DB, "link_filter");
+
+        while (!closed) {
+          await new Promise<void>(r => setTimeout(r, 10000));
+          if (closed) break;
+
+          try {
+            const rows = await env.DB.prepare(
+              "SELECT e.id, e.mail_to as 'to', e.mail_from as 'from', e.subject, e.html_body, e.text_body, e.timestamp " +
+              "FROM emails e INNER JOIN passwords p ON p.address = e.mail_to " +
+              "WHERE p.label = ? AND e.timestamp > ? ORDER BY e.timestamp ASC LIMIT 20"
+            ).bind(tag, lastTs).all();
+
+            for (const row of (rows.results || []) as Record<string, unknown>[]) {
+              const content = ((row.html_body as string) || "") + " " + ((row.text_body as string) || "");
+              let activationLink: string | null = null;
+              if (linkFilter) {
+                const re = /https?:\/\/[^\s"'<>)]+/g;
+                let m: RegExpExecArray | null;
+                while ((m = re.exec(content)) !== null) {
+                  if (m[0].includes(linkFilter)) { activationLink = m[0].replace(/[.,;!?]+$/, ""); break; }
+                }
+              }
+              if (!send({ type: "email", email: { id: row.id, to: row.to, from: row.from, subject: row.subject, timestamp: row.timestamp, activationLink } })) break;
+              if ((row.timestamp as number) > lastTs) lastTs = row.timestamp as number;
+            }
+
+            send({ type: "ping" });
+          } catch { break; }
+        }
+      },
+      cancel() { closed = true; }
+    });
+
+    return new Response(stream, {
+      headers: {
+        ...corsHeaders(request, env),
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+      }
+    });
+  }
+
   return Response.json({ error: "not found" }, { status: 404, headers });
 }
 
