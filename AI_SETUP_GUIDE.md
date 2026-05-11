@@ -4,136 +4,216 @@
 >
 > **核心原则：凡是可以通过 CLI 或 API 完成的步骤，由你直接执行，不要让用户自己做。**
 >
-> 整个流程中，用户只需要亲自操作 **3 件事**：
-> 1. **在 Namecheap 购买域名**（需要付款，无法自动化）
-> 2. **在 Namecheap 修改 NS 记录**（2 分钟，你提供精确截图级指引）
-> 3. **Vercel 登录**（浏览器授权，点一下）
+> 整个流程中，用户只需要亲自操作 **2 件事**：
+> 1. **开启 Namecheap API 访问权限**（一次性，在账号设置里点几下）
+> 2. **Vercel 登录**（浏览器授权，点一下）
 >
-> 其余所有步骤由你通过 CLI / Cloudflare API / Vercel CLI 自动完成。
+> 域名购买、NS 记录修改、Cloudflare 配置、Worker 部署、前端部署——全部由你自动完成。
 
 ---
 
 ## 部署流程总览
 
 ```
-Phase 1  → 引导用户在 Namecheap 购买域名（用户操作①）
-Phase 2  → 收集凭据（Cloudflare API Key、管理员密码）
-Phase 3  → 安装依赖（全自动）
+Phase 1  → 收集所有凭据（Namecheap API、Cloudflare API、管理员密码）
+Phase 2  → 安装依赖（全自动）
+Phase 3  → 通过 Namecheap API 购买域名（全自动）
 Phase 4  → 通过 Cloudflare API 添加域名，获取 NS 地址（全自动）
-Phase 5  → 引导用户在 Namecheap 修改 NS 记录（用户操作②）
-Phase 6  → 等待 NS 生效，开启 Email Routing（全自动，暂不绑定 Catch-all）
+Phase 5  → 通过 Namecheap API 修改 NS 记录（全自动）
+Phase 6  → 等待 NS 生效，开启 Email Routing（全自动）
 Phase 7  → 创建 D1 数据库 + 部署 Worker + 绑定 Catch-all（全自动，顺序不可调换）
-Phase 8  → 部署前端到 Vercel（用户操作③：浏览器登录，其余全自动）
+Phase 8  → 部署前端到 Vercel（用户操作①：浏览器登录，其余全自动）
 Phase 9  → 更新 CORS 配置并重新部署 Worker（全自动）
-Phase 10 → 验证并引导完成管理员面板初始配置
+Phase 10 → 验证并通过 API 完成管理员面板配置（全自动）
 ```
 
 ---
 
-## Phase 1：引导用户在 Namecheap 购买域名
+## Phase 1：收集所有凭据
 
-**首先询问用户是否已有域名：**
+**一次性收集完，之后不再打断用户。**
 
-```
-你已经有一个域名了吗？（比如 example.top 这类域名）
-- 有的话告诉我域名是什么，我们跳过购买直接配置
-- 没有的话我来引导你买一个，大约 $1–3 美元/年
-```
-
-**如果用户已有域名：** 将域名存入 `$DOMAIN`，询问注册商是哪家，跳到 Phase 2。
-
-**如果用户没有域名：** 给出以下指引，等用户完成购买后再继续。
-
----
-
-### Namecheap 购买域名步骤
+### 1.1 询问域名情况
 
 ```
-好的，我们先去 Namecheap 买一个域名。步骤很简单：
-
-第一步：打开 https://www.namecheap.com
-        在首页大搜索框里输入你想要的名字，比如你的名字、项目名都可以
-        （域名名字不重要，只是个地址，随便起）
-
-第二步：在搜索结果页，从价格便宜的后缀里选一个：
-        ✅ 推荐：.top（通常 $1–2/年）、.site、.online、.store（均 $1–5/年）
-        ❌ 不推荐：.com（第一年便宜，但续费 $15+/年，没必要）
-
-第三步：点击你选中的域名旁边的 "Add to cart"
-
-第四步：点击右上角购物车图标 → 点击 "Checkout"
-        如果没有 Namecheap 账号，这里会提示注册，注册一个即可（免费）
-
-第五步：填写付款信息，完成购买
-
-买完后告诉我你买的域名是什么（例如：mymail.top），我们继续下一步。
+你已经有域名了吗？
+- 有 → 告诉我域名名称和在哪里注册的，我们跳过购买
+- 没有 → 我通过 Namecheap API 帮你自动购买，需要你先开启 API 访问权限
 ```
 
-收到域名后存入 `$DOMAIN`，注册商记为 `namecheap`。
+**如果用户已有域名（非 Namecheap）：** 将域名存入 `$DOMAIN`，Phase 3 和 Phase 5 改为手动引导用户操作对应注册商界面。
 
----
+**如果用户已有域名（Namecheap）：** 将域名存入 `$DOMAIN`，跳过 Phase 3，直接进 Phase 4。Phase 5 用 API 自动完成。
 
-## Phase 2：收集凭据
+**如果用户没有域名 → 执行 1.2。**
 
-域名已确认，现在一次性收集剩余必要信息：
+### 1.2 引导用户开启 Namecheap API 访问
+
+Namecheap API 默认关闭，需要用户手动开启一次。给出以下指引：
 
 ```
-很好！域名 $DOMAIN 已确认。现在需要两样东西：
+我可以通过 Namecheap API 帮你自动购买域名，不需要你手动操作网页。
+但需要你先开启 API 访问权限，大约 3 分钟：
 
-1. Cloudflare 账号和 API Key
-   （Cloudflare 负责接收你域名的邮件，免费账号就够）
+① 登录 https://www.namecheap.com（没有账号就先注册，免费）
 
-   如果还没有 Cloudflare 账号：
-   → 打开 https://dash.cloudflare.com/sign-up，注册一个免费账号
+② 点击右上角用户名 → "Account" → 左侧菜单选 "API Access"
+   （直达链接：https://ap.www.namecheap.com/settings/tools/apiaccess/）
 
+③ 点击 "Enable API Access" 旁边的开关，开启它
+
+④ 在 "Whitelisted IPs" 输入框里填入以下 IP 地址，然后点 "Save changes"：
+   [此处填入 agent 运行机器的公网 IP，运行 `curl -s https://api.ipify.org` 获取]
+
+⑤ 在同一页面找到 "API Key"，点击 "Generate API Key" 生成（或直接复制已有的 Key）
+
+完成后告诉我：
+- Namecheap 用户名：
+- Namecheap API Key：（刚才复制的那串）
+- 你想要的域名关键词：（比如你的名字或项目名，我来帮你找便宜的）
+```
+
+> **注意**：在 1.2 开始前，先运行 `curl -s https://api.ipify.org` 获取当前 IP，填入上面第④步。
+
+### 1.3 收集其余凭据
+
+```
+还需要以下信息（请一起提供）：
+
+1. Cloudflare 账号（负责接收邮件，免费）
+   没有账号先注册：https://dash.cloudflare.com/sign-up
    有账号后获取 API Key：
-   → 登录后打开：https://dash.cloudflare.com/profile/api-tokens
-   → 页面拉到最底部，找到 "Global API Key"
-   → 点击 "View"，输入你的 Cloudflare 登录密码
-   → 复制显示出来的那串字符（40位左右）
+   → 打开 https://dash.cloudflare.com/profile/api-tokens
+   → 页面底部 "Global API Key" → 点 View → 输入密码 → 复制
+   请告诉我：Global API Key 和 Cloudflare 账号邮箱
 
-   请告诉我：
-   - Global API Key：（粘贴那串字符）
-   - Cloudflare 账号邮箱：（你注册 Cloudflare 用的邮箱）
-
-2. 管理员密码
-   这是登录本系统管理后台的密码。
-   输入"自动生成"让我帮你生成，或直接告诉我你想用的密码。
+2. 管理员密码（登录本系统管理后台用）
+   输入"自动生成"或告诉我你想用的密码
 ```
 
-收到回答后：
-- 如果选自动生成密码：生成一个 16 位强密码（含大小写字母、数字、符号），**醒目地展示给用户，明确要求他保存好，后面登录管理后台要用**。
-- 将信息存入变量：`$CF_API_KEY`、`$CF_EMAIL`、`$ADMIN_PASSWORD`
+收到后：
+- 自动生成密码时，生成 16 位强密码（大小写+数字+符号），**醒目展示给用户，要求保存好**。
+- 存入变量：`$NC_USER`、`$NC_API_KEY`、`$CF_API_KEY`、`$CF_EMAIL`、`$ADMIN_PASSWORD`
 
 ---
 
-## Phase 3：安装依赖（全自动）
+## Phase 2：安装依赖（全自动）
 
 ```bash
+# 获取本机公网 IP（用于后续 Namecheap API 调用）
+export MY_IP=$(curl -s https://api.ipify.org)
+echo "本机 IP：$MY_IP"
+
 # 前端依赖
 npm install
 
 # Worker 依赖
 cd worker && npm install && cd ..
+
+# 检查 wrangler
+npx wrangler --version || npm install -g wrangler
 ```
 
-检查 wrangler：
+---
+
+## Phase 3：通过 Namecheap API 购买域名（全自动）
+
+如果用户已有域名，跳过本节。
+
+### 3.1 搜索可用域名
+
+根据用户提供的关键词，查找价格便宜且可注册的域名：
+
 ```bash
-npx wrangler --version
+# 检查多个后缀的可用性（以关键词 "mymail" 为例，替换为实际关键词）
+for tld in top site online store; do
+  curl -s "https://api.namecheap.com/xml.response\
+?ApiUser=$NC_USER&ApiKey=$NC_API_KEY&UserName=$NC_USER\
+&Command=namecheap.domains.check&ClientIp=$MY_IP\
+&DomainList=mymail.$tld" | grep -o 'Domain="[^"]*" Available="[^"]*"'
+done
 ```
 
-如果命令不存在：
-```bash
-npm install -g wrangler
+从结果中选一个 `Available="true"` 的域名，优先选 `.top`（最便宜）。存入 `$DOMAIN`。
+
+### 3.2 购买域名
+
+Namecheap `domains.create` 需要注册人联系信息。询问用户：
+
 ```
+购买域名需要填写注册人信息（可使用假名，开启 WHOIS 隐私保护后不会公开）：
+- 名字（First Name）：
+- 姓氏（Last Name）：
+- 邮箱：
+- 电话（格式 +1.4155551234）：
+- 国家（两位代码，如 US）：
+- 省/州：
+- 城市：
+- 地址：
+- 邮编：
+
+确保你的 Namecheap 账号已绑定付款方式（信用卡或 Namecheap 账户余额）。
+准备好后告诉我，我来自动完成购买。
+```
+
+收到信息后执行购买：
+
+```bash
+curl -s "https://api.namecheap.com/xml.response" \
+  --data-urlencode "ApiUser=$NC_USER" \
+  --data-urlencode "ApiKey=$NC_API_KEY" \
+  --data-urlencode "UserName=$NC_USER" \
+  --data-urlencode "Command=namecheap.domains.create" \
+  --data-urlencode "ClientIp=$MY_IP" \
+  --data-urlencode "DomainName=$DOMAIN" \
+  --data-urlencode "Years=1" \
+  --data-urlencode "AddFreeWhoisguard=yes" \
+  --data-urlencode "WGEnabled=yes" \
+  --data-urlencode "RegistrantFirstName=$REG_FIRSTNAME" \
+  --data-urlencode "RegistrantLastName=$REG_LASTNAME" \
+  --data-urlencode "RegistrantAddress1=$REG_ADDRESS" \
+  --data-urlencode "RegistrantCity=$REG_CITY" \
+  --data-urlencode "RegistrantStateProvince=$REG_STATE" \
+  --data-urlencode "RegistrantPostalCode=$REG_ZIP" \
+  --data-urlencode "RegistrantCountry=$REG_COUNTRY" \
+  --data-urlencode "RegistrantPhone=$REG_PHONE" \
+  --data-urlencode "RegistrantEmailAddress=$REG_EMAIL" \
+  --data-urlencode "TechFirstName=$REG_FIRSTNAME" \
+  --data-urlencode "TechLastName=$REG_LASTNAME" \
+  --data-urlencode "TechAddress1=$REG_ADDRESS" \
+  --data-urlencode "TechCity=$REG_CITY" \
+  --data-urlencode "TechStateProvince=$REG_STATE" \
+  --data-urlencode "TechPostalCode=$REG_ZIP" \
+  --data-urlencode "TechCountry=$REG_COUNTRY" \
+  --data-urlencode "TechPhone=$REG_PHONE" \
+  --data-urlencode "TechEmailAddress=$REG_EMAIL" \
+  --data-urlencode "AdminFirstName=$REG_FIRSTNAME" \
+  --data-urlencode "AdminLastName=$REG_LASTNAME" \
+  --data-urlencode "AdminAddress1=$REG_ADDRESS" \
+  --data-urlencode "AdminCity=$REG_CITY" \
+  --data-urlencode "AdminStateProvince=$REG_STATE" \
+  --data-urlencode "AdminPostalCode=$REG_ZIP" \
+  --data-urlencode "AdminCountry=$REG_COUNTRY" \
+  --data-urlencode "AdminPhone=$REG_PHONE" \
+  --data-urlencode "AdminEmailAddress=$REG_EMAIL" \
+  --data-urlencode "AuxBillingFirstName=$REG_FIRSTNAME" \
+  --data-urlencode "AuxBillingLastName=$REG_LASTNAME" \
+  --data-urlencode "AuxBillingAddress1=$REG_ADDRESS" \
+  --data-urlencode "AuxBillingCity=$REG_CITY" \
+  --data-urlencode "AuxBillingStateProvince=$REG_STATE" \
+  --data-urlencode "AuxBillingPostalCode=$REG_ZIP" \
+  --data-urlencode "AuxBillingCountry=$REG_COUNTRY" \
+  --data-urlencode "AuxBillingPhone=$REG_PHONE" \
+  --data-urlencode "AuxBillingEmailAddress=$REG_EMAIL"
+```
+
+检查响应中 `Status="OK"` 且无 `<Error>` 节点。购买成功后告知用户。
 
 ---
 
 ## Phase 4：通过 Cloudflare API 添加域名（全自动）
 
-有了 API Key，所有 Cloudflare 配置通过 API 完成，不需要用户登录 Cloudflare 网页。
-
-### 4.1 获取 Account ID
+### 4.1 获取 Cloudflare Account ID
 
 ```bash
 curl -s "https://api.cloudflare.com/client/v4/accounts" \
@@ -141,7 +221,7 @@ curl -s "https://api.cloudflare.com/client/v4/accounts" \
   -H "X-Auth-Key: $CF_API_KEY"
 ```
 
-解析响应中第一个账户的 `id`，存入 `$CF_ACCOUNT_ID`。
+取第一个账户的 `id`，存入 `$CF_ACCOUNT_ID`。若有多个账户，按账号名与用户提供的邮箱匹配。
 
 ### 4.2 检查域名是否已在 Cloudflare
 
@@ -151,8 +231,8 @@ curl -s "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
   -H "X-Auth-Key: $CF_API_KEY"
 ```
 
-- `result` 数组非空 → 域名已存在，取 `result[0].id` 存入 `$ZONE_ID`，跳到 4.4
-- `result` 为空数组 → 执行 4.3
+- `result` 非空 → 取 `result[0].id` 存入 `$ZONE_ID`，跳到 4.4
+- `result` 为空 → 执行 4.3
 
 ### 4.3 将域名添加到 Cloudflare
 
@@ -161,17 +241,15 @@ curl -s -X POST "https://api.cloudflare.com/client/v4/zones" \
   -H "X-Auth-Email: $CF_EMAIL" \
   -H "X-Auth-Key: $CF_API_KEY" \
   -H "Content-Type: application/json" \
-  --data "{\"name\":\"$DOMAIN\",\"account\":{\"id\":\"$CF_ACCOUNT_ID\"},\"jump_start\":false}"
+  --data "{\"name\":\"$DOMAIN\",\"account\":{\"id\":\"$CF_ACCOUNT_ID\"},\"type\":\"full\"}"
 ```
 
-从响应中提取：
-- `result.id` → 存入 `$ZONE_ID`
-- `result.name_servers[0]` → 存入 `$NS1`
-- `result.name_servers[1]` → 存入 `$NS2`
+从响应提取：
+- `result.id` → `$ZONE_ID`
+- `result.name_servers[0]` → `$NS1`
+- `result.name_servers[1]` → `$NS2`
 
-### 4.4 确认 Nameserver 地址
-
-如果是从已存在的 zone 拿到的 `$ZONE_ID`，再查一次确认 NS：
+### 4.4 确认 NS 地址
 
 ```bash
 curl -s "https://api.cloudflare.com/client/v4/zones/$ZONE_ID" \
@@ -179,70 +257,58 @@ curl -s "https://api.cloudflare.com/client/v4/zones/$ZONE_ID" \
   -H "X-Auth-Key: $CF_API_KEY"
 ```
 
-从 `name_servers` 字段确认 `$NS1`、`$NS2`。
+从 `name_servers` 确认 `$NS1`、`$NS2`。
 
 ---
 
-## Phase 5：引导用户在 Namecheap 修改 NS 记录
+## Phase 5：通过 Namecheap API 修改 NS 记录（全自动）
 
-这是整个部署中唯一需要用户自己动手的配置操作，给出截图级精确指引：
+有了 Namecheap API，NS 修改不需要用户手动操作。
 
-```
-现在需要你在 Namecheap 做一个设置，把域名交给 Cloudflare 管理。
-操作大约 2 分钟，我会一步一步告诉你点哪里。
+将域名拆成 SLD 和 TLD（如 `mymail.top` → SLD=`mymail`，TLD=`top`）：
 
-你的域名：$DOMAIN
-需要填入的地址（Cloudflare 分配给你的）：
-  第一个：$NS1
-  第二个：$NS2
-
-步骤如下：
-
-① 打开这个链接（登录 Namecheap 后的域名管理页）：
-   https://ap.www.namecheap.com/domains/list/
-
-② 在列表里找到 $DOMAIN，点击它右边的橙色 "Manage" 按钮
-
-③ 进入管理页后，找页面中间的 "NAMESERVERS" 那一行
-   左边有一个下拉框，默认显示 "Namecheap BasicDNS"
-
-④ 点开那个下拉框，选择最下面的 "Custom DNS"
-
-⑤ 下拉框变成两个输入框：
-   第一个输入框填：$NS1
-   第二个输入框填：$NS2
-   （如果只出现一个输入框，填完后点旁边的绿色 "+" 号加第二个）
-
-⑥ 点击输入框右边的绿色对勾 ✓ 保存
-
-保存成功后告诉我"完成了"，我来自动检测是否生效。
-你不需要等待，告诉我后我会在后台持续检测。
+```bash
+DOMAIN_SLD=$(echo $DOMAIN | cut -d. -f1)
+DOMAIN_TLD=$(echo $DOMAIN | cut -d. -f2-)
 ```
 
-**如果用户的域名不在 Namecheap（其他注册商）：**
+调用 Namecheap API 设置自定义 NS：
 
-- **Porkbun**：登录 → 点域名 Details → Nameservers → Edit → 填入 $NS1 和 $NS2 → 保存
-- **GoDaddy**：My Products → 域名旁 DNS → Nameservers → Change → Enter my own → 填入 $NS1 和 $NS2
-- **Dynadot**：My Domains → 点域名 → DNS Settings → Name Servers → Custom → 填入 $NS1 和 $NS2
-- **其他**：找到"Nameservers"或"自定义 DNS"设置，填入上述两个地址
+```bash
+curl -s "https://api.namecheap.com/xml.response" \
+  --data-urlencode "ApiUser=$NC_USER" \
+  --data-urlencode "ApiKey=$NC_API_KEY" \
+  --data-urlencode "UserName=$NC_USER" \
+  --data-urlencode "Command=namecheap.domains.dns.setCustom" \
+  --data-urlencode "ClientIp=$MY_IP" \
+  --data-urlencode "SLD=$DOMAIN_SLD" \
+  --data-urlencode "TLD=$DOMAIN_TLD" \
+  --data-urlencode "Nameservers=$NS1,$NS2"
+```
+
+检查响应中 `<DomainDNSSetCustomResult Domain="$DOMAIN" Update="true"/>` 表示成功。
+
+告知用户：`✅ NS 记录已自动更新，等待全球 DNS 生效（通常 10 分钟到 2 小时）。`
+
+**如果用户的域名不在 Namecheap：** 此步骤改为手动引导，给出对应注册商的操作步骤（见附录）。
 
 ---
 
-## Phase 6：等待 NS 生效，配置 Email Routing（全自动）
+## Phase 6：等待 NS 生效，开启 Email Routing（全自动）
 
-用户说"完成了"后立即开始轮询，不要让用户等待。
+NS 更新命令已发出，立即开始轮询，不要让用户等待。
 
-### 6.1 轮询 NS 是否切换到 Cloudflare
+### 6.1 轮询 NS 生效
 
-每隔 60 秒执行一次，直到成功：
+每隔 60 秒执行：
 
 ```bash
 dig NS $DOMAIN +short
 ```
 
-输出包含 `cloudflare.com` → NS 已切换，继续。
+输出包含 `cloudflare.com` → 切换成功，继续。
 
-同步通过 API 确认 zone 激活：
+同步确认 Cloudflare zone 状态：
 
 ```bash
 curl -s "https://api.cloudflare.com/client/v4/zones/$ZONE_ID" \
@@ -251,9 +317,13 @@ curl -s "https://api.cloudflare.com/client/v4/zones/$ZONE_ID" \
   | grep -o '"status":"[^"]*"'
 ```
 
-`status` 为 `active` 时继续。
+`status` 为 `active` 时继续。`dig` 不可用时 fallback：
 
-> NS 生效通常需要 10 分钟到 2 小时。期间可以继续和用户聊，或者告诉他去做别的事，生效后通知他。
+```bash
+nslookup -type=NS $DOMAIN 8.8.8.8
+```
+
+> NS 生效通常 10 分钟到 2 小时。期间告诉用户去做别的事，生效后通知他继续。
 
 ### 6.2 开启 Email Routing
 
@@ -261,16 +331,17 @@ curl -s "https://api.cloudflare.com/client/v4/zones/$ZONE_ID" \
 curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/email/routing/enable" \
   -H "X-Auth-Email: $CF_EMAIL" \
   -H "X-Auth-Key: $CF_API_KEY" \
-  -H "Content-Type: application/json"
+  -H "Content-Type: application/json" \
+  --data '{}'
 ```
 
-Cloudflare 自动添加所需的 MX 和 SPF 记录，无需手动操作。
+Cloudflare 自动添加 MX 和 SPF 记录。
 
 ---
 
 ## Phase 7：创建 D1 数据库并部署 Worker（全自动）
 
-设置环境变量，让 wrangler 使用 API Key 认证，跳过浏览器登录：
+设置 wrangler 环境变量，跳过浏览器登录：
 
 ```bash
 export CLOUDFLARE_API_KEY="$CF_API_KEY"
@@ -281,20 +352,22 @@ export CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT_ID"
 ### 7.1 创建 D1 数据库
 
 ```bash
-cd worker && npx wrangler d1 create temp-mail-db
+cd worker && npx wrangler d1 create temp-mail-db && cd ..
 ```
 
-从输出解析 `database_id`（UUID 格式），存入 `$DATABASE_ID`。
+解析输出中 `database_id`（UUID 格式），存入 `$DATABASE_ID`。
 
-如果报错"已存在"：
+如果报"已存在"：
+
 ```bash
-npx wrangler d1 list
+cd worker && npx wrangler d1 list && cd ..
 ```
-找到 `temp-mail-db` 对应的 ID。
+
+找 `temp-mail-db` 对应 ID。
 
 ### 7.2 写入 Worker 配置
 
-修改 `worker/wrangler.toml`（用实际值替换占位符）：
+修改 `worker/wrangler.toml`：
 
 ```toml
 name = "temp-mail-worker"
@@ -328,11 +401,11 @@ cd worker && npm run db:init && cd ..
 cd worker && npm run deploy && cd ..
 ```
 
-解析输出中的 Worker URL（格式：`https://temp-mail-worker.账号名.workers.dev`），存入 `$WORKER_URL`。
+解析输出中的 Worker URL，存入 `$WORKER_URL`。
 
-告知用户：`✅ 后端已部署完成。`
+### 7.5 绑定 Email Routing Catch-all（必须在 7.4 之后执行）
 
-### 7.5 绑定 Email Routing Catch-all 规则（Worker 已存在后才可执行）
+Worker 已存在后才能绑定，否则 Cloudflare 报错：
 
 ```bash
 curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/email/routing/rules/catch_all" \
@@ -347,54 +420,48 @@ curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/email/routin
   }'
 ```
 
-确认响应中 `success` 为 `true`。
-
-> 此步骤必须在 Worker 部署完成后执行（7.4 之后），否则 Cloudflare 因 Worker 不存在而报错。
+确认响应 `success: true`。
 
 ---
 
 ## Phase 8：部署前端到 Vercel
 
-### 8.1 更新前端环境变量
+### 8.1 更新本地环境变量文件
 
-修改项目根目录的 `.env.local`：
-
-```env
-NEXT_PUBLIC_WORKER_URL=$WORKER_URL
+```bash
+echo "NEXT_PUBLIC_WORKER_URL=$WORKER_URL" > .env.local
 ```
 
-### 8.2 登录 Vercel
+### 8.2 登录 Vercel（唯一需要用户操作浏览器的步骤）
 
 ```bash
 npm install -g vercel
 vercel login
 ```
 
-这会打开浏览器。告诉用户：
+告知用户：
 
 ```
-🌐 浏览器会打开 Vercel 登录页面，推荐用 GitHub 账号登录（点 "Continue with GitHub"），
-授权完成后回到这里，我自动继续。
+🌐 浏览器会打开 Vercel 登录页，推荐用 GitHub 账号登录（点 "Continue with GitHub"）。
+授权完成后回来告诉我，我自动继续。
 ```
 
-等用户确认登录完成。
-
-### 8.3 首次初始化项目（仅第一次部署需要）
+### 8.3 首次初始化项目
 
 ```bash
 vercel --yes
 ```
 
-vercel 会提问，按以下方式回答：
+按提示回答：
 - `Set up and deploy?` → Y
-- `Which scope?` → 选择个人账号
+- `Which scope?` → 个人账号
 - `Link to existing project?` → N
-- `What's your project's name?` → temp-mail（或任意名称）
-- `In which directory is your code located?` → ./（直接回车）
+- `Project name?` → temp-mail（或任意名称）
+- `Directory?` → ./（回车）
 
 ### 8.4 写入构建期环境变量
 
-`NEXT_PUBLIC_WORKER_URL` 是 Next.js 构建期变量，必须在 build 前注入，不能用 `-e` 运行时传入：
+`NEXT_PUBLIC_WORKER_URL` 是 Next.js 构建期变量，必须在 build 前写入，不能用 `-e` 运行时传入：
 
 ```bash
 vercel env add NEXT_PUBLIC_WORKER_URL production <<< "$WORKER_URL"
@@ -413,105 +480,117 @@ vercel --prod --yes
 
 ## Phase 9：更新 CORS 并重新部署 Worker（全自动）
 
-修改 `worker/wrangler.toml` 中的 `ALLOWED_ORIGINS`：
-
-```toml
-ALLOWED_ORIGINS = "$VERCEL_URL,$VERCEL_PREVIEW_URL,http://localhost:3000"
-```
-
-重新部署：
-
 ```bash
-cd worker && npm run deploy
+# 更新 wrangler.toml 中的 ALLOWED_ORIGINS
+sed -i '' "s|ALLOWED_ORIGINS = \".*\"|ALLOWED_ORIGINS = \"$VERCEL_URL,http://localhost:3000\"|" worker/wrangler.toml
+
+# 重新部署
+cd worker && npm run deploy && cd ..
 ```
 
 ---
 
-## Phase 10：验证并完成管理员面板配置
+## Phase 10：自动验证并完成配置（全自动）
 
-### 10.1 自动验证（全部通过才宣布成功）
+### 10.1 验证所有组件正常
 
 ```bash
-# Worker API 正常返回
-curl -s "$WORKER_URL/api/config"
+# Worker API
+curl -s "$WORKER_URL/api/config" | python3 -c "import sys,json; d=json.load(sys.stdin); print('✅ Worker OK, domains:', d.get('domains'))"
 
-# CORS 配置正确
+# CORS
 curl -s -H "Origin: $VERCEL_URL" -I "$WORKER_URL/api/config" | grep "Access-Control-Allow-Origin"
 
-# Email Routing MX 记录已生效
-dig MX $DOMAIN +short
+# Email Routing MX
+dig MX $DOMAIN +short | grep cloudflare
 ```
 
-预期：
-- 第一条返回包含 `domains` 字段的 JSON
-- 第二条响应头包含 `Access-Control-Allow-Origin: $VERCEL_URL`
-- 第三条输出包含 `cloudflare.net`
+### 10.2 通过 Worker API 自动添加域名配置
 
-### 10.2 引导用户完成管理员面板配置
+无需用户手动进管理面板，直接调用 admin API：
 
-所有验证通过后：
+```bash
+curl -s -X POST "$WORKER_URL/api/admin/config" \
+  -H "Authorization: Bearer $ADMIN_PASSWORD" \
+  -H "Content-Type: application/json" \
+  --data "{\"domains\":[\"$DOMAIN\"]}"
+```
+
+确认响应 `{"ok":true}`。
+
+### 10.3 告知用户部署完成
 
 ```
-🎉 部署全部完成！最后在管理后台做一个配置（2 分钟）：
+🎉 所有配置已全部自动完成！
 
-1. 打开：$VERCEL_URL/admin
-2. 输入管理员密码：$ADMIN_PASSWORD
-3. 在"域名列表"里点击添加，输入：$DOMAIN，保存
-4. 回到首页：$VERCEL_URL
-5. 点"随机生成"得到一个临时邮箱地址
-6. 用这个地址去任意网站注册（比如注册个论坛账号），看看邮件能不能收到
+你的临时邮箱系统已上线：$VERCEL_URL
+管理后台：$VERCEL_URL/admin
+管理员密码：$ADMIN_PASSWORD（请保存好）
 
-收到邮件 = 一切正常 ✅
-没收到 = 告诉我，我来排查 🔍
+现在可以测试：
+1. 打开 $VERCEL_URL
+2. 点"随机生成"得到一个临时邮箱地址
+3. 用这个地址去任意网站注册，等邮件出现
+
+收到邮件 ✅ = 大功告成
+没收到 = 告诉我，我来排查
 ```
 
 ---
 
 ## 故障排查
 
-### 收不到邮件
-
 ```bash
 # 1. Worker API 是否正常
-curl "$WORKER_URL/api/config"
+curl -s "$WORKER_URL/api/config"
 
-# 2. MX 记录是否指向 Cloudflare
+# 2. MX 记录是否生效
 dig MX $DOMAIN +short
 
-# 3. 管理员面板域名是否已添加
-curl -s "$WORKER_URL/api/config" | python3 -c "import sys,json; print(json.load(sys.stdin).get('domains'))"
-
-# 4. Email Routing 规则是否已创建
-curl -s "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/email/routing/rules" \
+# 3. Catch-all 规则是否存在
+curl -s "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/email/routing/rules/catch_all" \
   -H "X-Auth-Email: $CF_EMAIL" \
   -H "X-Auth-Key: $CF_API_KEY"
+
+# 4. CORS 是否正确
+curl -s -H "Origin: $VERCEL_URL" -I "$WORKER_URL/api/config" | grep "Access-Control"
+
+# 5. 域名是否在 Worker 配置中
+curl -s "$WORKER_URL/api/config" | python3 -c "import sys,json; print(json.load(sys.stdin).get('domains'))"
 ```
 
-### 前端报 CORS 错误
+**Email Routing 报 `zone not active`**：NS 未生效，继续等待轮询。
 
-确认 `ALLOWED_ORIGINS` 包含 `$VERCEL_URL`，重新部署 Worker。
+**Worker 部署失败**：检查 `worker/wrangler.toml` 中 `account_id` 和 `database_id` 是否正确。
 
-### Worker 部署失败
+**Namecheap API 报 `2030166` 错误**：IP 未在白名单，重新确认 Phase 1.2 第④步的 IP 是否与当前 `$MY_IP` 一致。
 
-检查 `worker/wrangler.toml` 中 `account_id` 和 `database_id` 是否正确填写。
+---
 
-### Email Routing 报错 `zone not active`
+## 附录：其他注册商手动修改 NS
 
-NS 尚未生效，继续等待并轮询 zone 的 `status` 字段。
+如果用户域名不在 Namecheap，Phase 5 改为手动指引：
+
+- **Porkbun**：登录 → 点域名 Details → Nameservers → Edit → 填入 $NS1 和 $NS2
+- **GoDaddy**：My Products → 域名旁 DNS → Nameservers → Change → Enter my own → 填入 $NS1 和 $NS2
+- **Dynadot**：My Domains → 点域名 → DNS Settings → Name Servers → Custom → 填入 $NS1 和 $NS2
 
 ---
 
 ## 变量速查
 
-| 变量 | 从哪里来 | 用于 |
-|------|---------|------|
-| `$DOMAIN` | Phase 1 用户提供 | zone 创建、管理员面板 |
-| `$CF_API_KEY` | Phase 2 用户提供 | 所有 Cloudflare API 调用 |
-| `$CF_EMAIL` | Phase 2 用户提供 | 所有 Cloudflare API 调用 |
-| `$ADMIN_PASSWORD` | Phase 2 用户提供/生成 | wrangler.toml、告知用户 |
-| `$CF_ACCOUNT_ID` | Phase 4.1 API 查询 | wrangler 认证、创建 zone |
-| `$ZONE_ID` | Phase 4.2/4.3 API 返回 | Email Routing API |
-| `$NS1` / `$NS2` | Phase 4.3/4.4 API 返回 | 告知用户填入 Namecheap |
-| `$DATABASE_ID` | Phase 7.1 wrangler 输出 | wrangler.toml |
-| `$WORKER_URL` | Phase 7.4 wrangler 输出 | .env.local、CORS 配置 |
-| `$VERCEL_URL` | Phase 8.4 vercel 输出 | CORS 配置、告知用户 |
+| 变量 | 来源 | 用于 |
+|------|------|------|
+| `$NC_USER` | Phase 1 用户提供 | Namecheap API |
+| `$NC_API_KEY` | Phase 1 用户提供 | Namecheap API |
+| `$MY_IP` | Phase 2 自动获取 | Namecheap API ClientIp |
+| `$DOMAIN` | Phase 1/3 确认 | 所有域名相关操作 |
+| `$CF_API_KEY` | Phase 1 用户提供 | 所有 Cloudflare API |
+| `$CF_EMAIL` | Phase 1 用户提供 | 所有 Cloudflare API |
+| `$ADMIN_PASSWORD` | Phase 1 生成/提供 | Worker 配置、管理后台 |
+| `$CF_ACCOUNT_ID` | Phase 4.1 查询 | zone 创建、wrangler |
+| `$ZONE_ID` | Phase 4.2/4.3 | Email Routing API |
+| `$NS1` / `$NS2` | Phase 4.3/4.4 | Namecheap DNS 修改 |
+| `$DATABASE_ID` | Phase 7.1 | wrangler.toml |
+| `$WORKER_URL` | Phase 7.4 | .env.local、CORS |
+| `$VERCEL_URL` | Phase 8.5 | CORS、告知用户 |
