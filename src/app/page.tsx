@@ -69,6 +69,7 @@ function GenerateEmailPanel({ tag, allDomains, adminToken }: { tag: string; allD
   // Which domains are enabled in the random pool (localStorage-backed, per tag)
   const [enabledDomains, setEnabledDomains] = useState<Set<string>>(new Set());
   const [poolReady, setPoolReady] = useState(false);
+  const [quotasLoaded, setQuotasLoaded] = useState(false);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
   const copy = async (text: string) => {
@@ -91,6 +92,7 @@ function GenerateEmailPanel({ tag, allDomains, adminToken }: { tag: string; allD
         };
       }
       setDomainQuotas(q);
+      setQuotasLoaded(true);
     } catch { /* ignore */ }
   }, []);
 
@@ -145,7 +147,7 @@ function GenerateEmailPanel({ tag, allDomains, adminToken }: { tag: string; allD
     const available = allDomains.filter(d => {
       if (!enabledDomains.has(d)) return false;
       const q = domainQuotas[d];
-      if (!q) return true;
+      if (!q) return false;
       return q.used < q.limit && q.hourlyUsed < q.hourlyLimit;
     });
     if (available.length === 0) {
@@ -174,10 +176,10 @@ function GenerateEmailPanel({ tag, allDomains, adminToken }: { tag: string; allD
     copy(addr);
   };
 
-  const allDomainsFull = poolReady && allDomains.length > 0 && allDomains
+  const allDomainsFull = quotasLoaded && allDomains.length > 0 && allDomains
     .filter(d => enabledDomains.has(d))
-    .every(d => { const q = domainQuotas[d]; return q && (q.used >= q.limit || q.hourlyUsed >= q.hourlyLimit); });
-  const disabled = allDomainsFull || !poolReady;
+    .every(d => { const q = domainQuotas[d]; return !q || q.used >= q.limit || q.hourlyUsed >= q.hourlyLimit; });
+  const disabled = !poolReady || !quotasLoaded || allDomainsFull;
 
   return (
     <div className="card mb-4" style={{ borderLeft: "3px solid #4caf50" }}>
@@ -206,7 +208,7 @@ function GenerateEmailPanel({ tag, allDomains, adminToken }: { tag: string; allD
             whiteSpace: "nowrap",
           }}
         >
-          {allDomainsFull ? "域名配额已满" : "🎲 随机生成"}
+          {!quotasLoaded ? "⏳ 加载中..." : allDomainsFull ? "域名配额已满" : "🎲 随机生成"}
         </button>
         <button
           onClick={() => { loadDomainQuotas(allDomains); loadTagQuota(); }}
@@ -256,11 +258,13 @@ function GenerateEmailPanel({ tag, allDomains, adminToken }: { tag: string; allD
                   <span className={`text-xs font-mono ${full ? "text-gray-400 line-through" : "text-gray-700"}`}>
                     {d}
                   </span>
-                  {q && (
+                  {!quotasLoaded ? (
+                    <span className="text-xs text-gray-300">···</span>
+                  ) : q ? (
                     <span className="text-xs text-gray-400">
                       今日剩 {dailyRem}/{q.limit} · 本时剩 {hourlyRem}/{q.hourlyLimit}
                     </span>
-                  )}
+                  ) : null}
                 </label>
               );
             })}
@@ -431,7 +435,7 @@ function TagEmailsPanel({ tag }: { tag: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${WORKER_URL}/api/tag-emails?tag=${encodeURIComponent(tag)}`);
+      const res = await fetch(`${WORKER_URL}/api/tag-emails?tag=${encodeURIComponent(tag)}`, { cache: "no-store" });
       if (!res.ok) return;
       const d = await res.json() as { emails: { id: string; to: string; from: string; subject: string; timestamp: number; activationLink: string | null }[] };
       setAllEmails((d.emails || []).map(e => ({ ...e, toAddress: e.to })));
