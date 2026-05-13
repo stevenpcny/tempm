@@ -107,6 +107,19 @@ async function getTagRules(db: D1Database): Promise<TagRule[]> {
   try { return JSON.parse(raw); } catch { return []; }
 }
 
+async function getLimits(db: D1Database) {
+  const [t, d, h] = await Promise.all([
+    getConfig(db, "tag_daily_limit"),
+    getConfig(db, "domain_daily_limit"),
+    getConfig(db, "domain_hourly_limit"),
+  ]);
+  return {
+    tagDaily: parseInt(t) || 30,
+    domainDaily: parseInt(d) || 20,
+    domainHourly: parseInt(h) || 5,
+  };
+}
+
 // Parse -tag suffix from email local part using last dash segment
 // "john42-ck" → { local: "john42", tag: "ck" }
 // "smith-jones" (no matching tag) → { local: "smith-jones", tag: null }
@@ -165,8 +178,6 @@ function getLastEasternReset(): number {
   const etToUTCOffsetMs = nowAsUTC - nowAsET; // positive: ET is behind UTC
   return new Date(resetStr).getTime() + etToUTCOffsetMs;
 }
-
-const TAG_DAILY_LIMIT = 30;
 
 // ========== Email parsing ==========
 
@@ -342,6 +353,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
       const domainsPool2 = await getDomainsPool2(env.DB);
       const forwardRules = await getForwardRules(env.DB);
       const tagRules = await getTagRules(env.DB);
+      const { tagDaily, domainDaily, domainHourly } = await getLimits(env.DB);
       const siteName = await getConfig(env.DB, "site_name");
       const autoDeleteHours = await getConfig(env.DB, "auto_delete_hours");
       const linkFilter = await getConfig(env.DB, "link_filter");
@@ -352,6 +364,9 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
         autoDeleteHours: parseInt(autoDeleteHours) || 24,
         linkFilter: linkFilter || "https://auth.heygen.com/",
         hasSitePassword,
+        tagDailyLimit: tagDaily,
+        domainDailyLimit: domainDaily,
+        domainHourlyLimit: domainHourly,
       }, { headers });
     }
 
@@ -368,6 +383,9 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
         linkFilter?: string;
         sitePassword?: string;
         clearSitePassword?: boolean;
+        tagDailyLimit?: number;
+        domainDailyLimit?: number;
+        domainHourlyLimit?: number;
       };
       if (body.domains !== undefined) await setConfig(env.DB, "domains", JSON.stringify(body.domains));
       if (body.domainsPool2 !== undefined) await setConfig(env.DB, "domains_pool2", JSON.stringify(body.domainsPool2));
@@ -376,6 +394,21 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
       if (body.siteName !== undefined) await setConfig(env.DB, "site_name", body.siteName);
       if (body.autoDeleteHours !== undefined) await setConfig(env.DB, "auto_delete_hours", String(body.autoDeleteHours));
       if (body.linkFilter !== undefined) await setConfig(env.DB, "link_filter", body.linkFilter);
+      if (body.tagDailyLimit !== undefined) {
+        const v = parseInt(String(body.tagDailyLimit));
+        if (!v || v < 1) return Response.json({ error: "tagDailyLimit must be >= 1" }, { status: 400, headers });
+        await setConfig(env.DB, "tag_daily_limit", String(v));
+      }
+      if (body.domainDailyLimit !== undefined) {
+        const v = parseInt(String(body.domainDailyLimit));
+        if (!v || v < 1) return Response.json({ error: "domainDailyLimit must be >= 1" }, { status: 400, headers });
+        await setConfig(env.DB, "domain_daily_limit", String(v));
+      }
+      if (body.domainHourlyLimit !== undefined) {
+        const v = parseInt(String(body.domainHourlyLimit));
+        if (!v || v < 1) return Response.json({ error: "domainHourlyLimit must be >= 1" }, { status: 400, headers });
+        await setConfig(env.DB, "domain_hourly_limit", String(v));
+      }
       if (body.clearSitePassword) await setConfig(env.DB, "site_password_hash", "");
       if (body.sitePassword) {
         const encoder = new TextEncoder();
@@ -527,7 +560,8 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
       "SELECT COUNT(*) as count FROM passwords WHERE address LIKE ? AND created_at >= ?"
     ).bind(`%@${domain}`, todayStart.getTime()).first() as { count: number } | null;
     const used = result?.count || 0;
-    const limit = 30;
+    const { domainDaily } = await getLimits(env.DB);
+    const limit = domainDaily;
     return Response.json({ domain, used, limit, remaining: Math.max(0, limit - used) }, { headers });
   }
 
@@ -553,7 +587,8 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     for (const r of (dailyRows.results || []) as { domain: string; count: number }[]) daily[r.domain] = r.count;
     for (const r of (hourlyRows.results || []) as { domain: string; count: number }[]) hourly[r.domain] = r.count;
 
-    return Response.json({ daily, hourly, hourlyLimit: 5, dailyLimit: 20 }, { headers });
+    const { domainDaily, domainHourly } = await getLimits(env.DB);
+    return Response.json({ daily, hourly, hourlyLimit: domainHourly, dailyLimit: domainDaily }, { headers });
   }
 
   // GET /api/tag-quota?label=xxx — confirmed (received email) addresses for a tag today (resets 23:30 ET)
@@ -565,8 +600,9 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
       "SELECT COUNT(*) as count FROM passwords WHERE label = ? AND confirmed = 1 AND created_at >= ?"
     ).bind(label, resetTs).first() as { count: number } | null;
     const used = result?.count || 0;
+    const { tagDaily } = await getLimits(env.DB);
     return Response.json({
-      label, used, limit: TAG_DAILY_LIMIT, remaining: Math.max(0, TAG_DAILY_LIMIT - used),
+      label, used, limit: tagDaily, remaining: Math.max(0, tagDaily - used),
     }, { headers });
   }
 
@@ -686,6 +722,7 @@ export default {
   async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
     const to = message.to.toLowerCase();
     const [localPart, domain] = to.split("@");
+    const { tagDaily, domainDaily, domainHourly } = await getLimits(env.DB);
 
     const domains = await getDomains(env.DB);
     const domainsPool2 = await getDomainsPool2(env.DB);
@@ -754,7 +791,7 @@ export default {
           const tagCount = await env.DB.prepare(
             "SELECT COUNT(*) as count FROM passwords WHERE label = ? AND confirmed = 1 AND created_at >= ?"
           ).bind(tag, resetTs).first() as { count: number } | null;
-          if ((tagCount?.count || 0) >= TAG_DAILY_LIMIT) return; // quota full, drop email silently
+          if ((tagCount?.count || 0) >= tagDaily) return; // quota full, drop email silently
         }
         await env.DB.prepare(
           "UPDATE passwords SET confirmed = 1, updated_at = ? WHERE address = ?"
@@ -776,7 +813,7 @@ export default {
             const tagCount = await env.DB.prepare(
               "SELECT COUNT(*) as count FROM passwords WHERE label = ? AND confirmed = 1 AND created_at >= ?"
             ).bind(tag, resetTs).first() as { count: number } | null;
-            if ((tagCount?.count || 0) >= TAG_DAILY_LIMIT) return;
+            if ((tagCount?.count || 0) >= tagDaily) return;
           }
           await env.DB.prepare(
             "UPDATE passwords SET confirmed = 1, updated_at = ? WHERE address = ?"
@@ -794,7 +831,7 @@ export default {
           env.DB.prepare("SELECT COUNT(*) as count FROM passwords WHERE confirmed = 1 AND address LIKE ? AND created_at >= ?").bind(`%@${domain}`, todayStart.getTime()).first() as Promise<{ count: number } | null>,
           env.DB.prepare("SELECT COUNT(*) as count FROM passwords WHERE confirmed = 1 AND address LIKE ? AND created_at >= ?").bind(`%@${domain}`, hourStart.getTime()).first() as Promise<{ count: number } | null>,
         ]);
-        if ((dailyRow?.count || 0) >= 20 || (hourlyRow?.count || 0) >= 5) return;
+        if ((dailyRow?.count || 0) >= domainDaily || (hourlyRow?.count || 0) >= domainHourly) return;
         await env.DB.prepare(
           "INSERT INTO passwords (address, password, label, confirmed, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)"
         ).bind(accountAddress, generatePassword(), tag, now, now).run();
