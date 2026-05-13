@@ -455,16 +455,18 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get("limit") || "50")));
     const start = url.searchParams.get("start") || "";
     const end = url.searchParams.get("end") || "";
-    const linkStart = url.searchParams.get("linkStart") || "";
-    const linkEnd = url.searchParams.get("linkEnd") || "";
+    const linkDays = url.searchParams.get("linkDays") || "";
     const offset = (page - 1) * limit;
 
     let where = tag ? "WHERE confirmed = 1 AND (label = ? OR address LIKE ?)" : "WHERE confirmed = 1";
     const binds: (string | number)[] = tag ? [tag, `%-${tag}@%`] : [];
     if (start) { where += " AND created_at >= ?"; binds.push(parseInt(start)); }
     if (end) { where += " AND created_at <= ?"; binds.push(parseInt(end)); }
-    if (linkStart) { where += " AND (last_link_received_at IS NULL OR last_link_received_at < ?)"; binds.push(parseInt(linkStart)); }
-    if (linkEnd) { where += " AND (last_link_received_at IS NULL OR last_link_received_at > ?)"; binds.push(parseInt(linkEnd)); }
+    if (linkDays) {
+      const cutoff = Date.now() - parseInt(linkDays) * 86400000;
+      where += " AND last_link_received_at IS NOT NULL AND last_link_received_at <= ?";
+      binds.push(cutoff);
+    }
 
     const countRow = await env.DB.prepare(`SELECT COUNT(*) as total FROM passwords ${where}`).bind(...binds).first() as { total: number } | null;
     const total = countRow?.total || 0;

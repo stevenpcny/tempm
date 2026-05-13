@@ -787,8 +787,7 @@ export default function Home() {
   // Date range filters
   const [startDate, setStartDate] = useState("");
   const [endDate,   setEndDate]   = useState("");
-  const [linkStartDate, setLinkStartDate] = useState("");
-  const [linkEndDate,   setLinkEndDate]   = useState("");
+  const [linkDays, setLinkDays] = useState("");
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 50;
 
@@ -824,8 +823,7 @@ export default function Home() {
       if (activeTag !== "all") params.set("tag", activeTag);
       if (startDate) params.set("start", String(new Date(startDate + "T00:00:00").getTime()));
       if (endDate) params.set("end", String(new Date(endDate + "T23:59:59").getTime()));
-      if (linkStartDate) params.set("linkStart", String(new Date(linkStartDate + "T00:00:00").getTime()));
-      if (linkEndDate) params.set("linkEnd", String(new Date(linkEndDate + "T23:59:59").getTime()));
+      if (linkDays) params.set("linkDays", linkDays);
       const res = await fetch(`${WORKER_URL}/api/passwords?${params}`, {
         headers: { "Authorization": `Bearer ${adminToken}` },
       });
@@ -836,21 +834,21 @@ export default function Home() {
         setTotalEntries(d.total || 0);
       }
     } finally { setLoading(false); }
-  }, [adminToken, activeTag, startDate, endDate, linkStartDate, linkEndDate, page]);
+  }, [adminToken, activeTag, startDate, endDate, linkDays, page]);
 
   useEffect(() => { loadEntries(); }, [loadEntries]);
 
   // Reset to page 1 when filter/tag changes
-  useEffect(() => { setPage(1); }, [activeTag, startDate, endDate, linkStartDate, linkEndDate]);
+  useEffect(() => { setPage(1); }, [activeTag, startDate, endDate, linkDays]);
 
   // Auto-refresh every 10s when 未收到链接 filter is active
   const loadEntriesRef = useRef(loadEntries);
   useEffect(() => { loadEntriesRef.current = loadEntries; }, [loadEntries]);
   useEffect(() => {
-    if (!linkStartDate && !linkEndDate) return;
+    if (!linkDays) return;
     const id = setInterval(() => { loadEntriesRef.current(); }, 10000);
     return () => clearInterval(id);
-  }, [linkStartDate, linkEndDate]);
+  }, [linkDays]);
 
   const totalPages = Math.max(1, Math.ceil(totalEntries / PAGE_SIZE));
 
@@ -866,7 +864,7 @@ export default function Home() {
     setExpanded((prev) => ({ ...prev, [address]: !prev[address] }));
 
   const hasDateFilter = startDate || endDate;
-  const hasLinkFilter = linkStartDate || linkEndDate;
+  const hasLinkFilter = !!linkDays;
 
   if (!adminToken) {
     return (
@@ -961,16 +959,14 @@ export default function Home() {
               )}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-gray-500 shrink-0 w-20">未收到链接：</span>
-              <input type="date" value={linkStartDate} onChange={e => setLinkStartDate(e.target.value)}
-                className="text-xs rounded-lg border px-2 py-1.5 outline-none"
+              <span className="text-xs text-gray-500 shrink-0 w-20">链接超过：</span>
+              <input type="number" min="1" value={linkDays} onChange={e => setLinkDays(e.target.value)}
+                placeholder="天数"
+                className="text-xs rounded-lg border px-2 py-1.5 outline-none w-20"
                 style={{ borderColor: "#e0e0e0", color: "var(--primary-dark)" }} />
-              <span className="text-xs text-gray-400">—</span>
-              <input type="date" value={linkEndDate} onChange={e => setLinkEndDate(e.target.value)}
-                className="text-xs rounded-lg border px-2 py-1.5 outline-none"
-                style={{ borderColor: "#e0e0e0", color: "var(--primary-dark)" }} />
+              <span className="text-xs text-gray-400">天未使用</span>
               {hasLinkFilter && (
-                <button onClick={() => { setLinkStartDate(""); setLinkEndDate(""); }}
+                <button onClick={() => setLinkDays("")}
                   className="text-xs text-gray-400 hover:text-red-400">✕ 清除</button>
               )}
             </div>
