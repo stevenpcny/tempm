@@ -48,6 +48,9 @@ export default function AdminPage() {
   const [stats, setStats] = useState<Stats>({ totalEmails: 0, todayEmails: 0 });
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [tagDailyLimit, setTagDailyLimit] = useState<number>(30);
+  const [domainDailyLimit, setDomainDailyLimit] = useState<number>(20);
+  const [domainHourlyLimit, setDomainHourlyLimit] = useState<number>(5);
 
   // New domain / forward rule / tag rule inputs
   const [newDomain, setNewDomain] = useState("");
@@ -97,6 +100,9 @@ export default function AdminPage() {
       }
       const data = await res.json();
       setConfig(data);
+      if (data.tagDailyLimit) setTagDailyLimit(data.tagDailyLimit);
+      if (data.domainDailyLimit) setDomainDailyLimit(data.domainDailyLimit);
+      if (data.domainHourlyLimit) setDomainHourlyLimit(data.domainHourlyLimit);
     } catch {
       showToast("❌ 加载配置失败");
     }
@@ -133,6 +139,9 @@ export default function AdminPage() {
     setSaving(true);
     try {
       const body: Record<string, unknown> = { ...config };
+      body.tagDailyLimit = tagDailyLimit;
+      body.domainDailyLimit = domainDailyLimit;
+      body.domainHourlyLimit = domainHourlyLimit;
       if (newSitePassword) {
         body.sitePassword = newSitePassword;
       }
@@ -401,6 +410,47 @@ export default function AdminPage() {
               )}
             </div>
             <p className="text-xs text-gray-400 mt-1">留空则不修改密码；管理后台有独立密码，不受此影响</p>
+          </div>
+        </div>
+
+        <div className="card mb-6">
+          <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--primary)" }}>
+            配额设置
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">标签每日上限</label>
+              <input
+                type="number"
+                min={1}
+                value={tagDailyLimit}
+                onChange={(e) => setTagDailyLimit(parseInt(e.target.value) || 1)}
+                className="email-input"
+                style={{ textAlign: "left", fontSize: "14px" }}
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">域名每日上限</label>
+              <input
+                type="number"
+                min={1}
+                value={domainDailyLimit}
+                onChange={(e) => setDomainDailyLimit(parseInt(e.target.value) || 1)}
+                className="email-input"
+                style={{ textAlign: "left", fontSize: "14px" }}
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">域名每小时上限</label>
+              <input
+                type="number"
+                min={1}
+                value={domainHourlyLimit}
+                onChange={(e) => setDomainHourlyLimit(parseInt(e.target.value) || 1)}
+                className="email-input"
+                style={{ textAlign: "left", fontSize: "14px" }}
+              />
+            </div>
           </div>
         </div>
 

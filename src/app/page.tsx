@@ -136,6 +136,17 @@ function GenerateEmailPanel({ tag, allDomains, adminToken, sseDisabled }: { tag:
   };
 
   const generate = async () => {
+    const currentPoolDomains = allDomains.filter(d => enabledDomains.has(d));
+    const allFull = currentPoolDomains
+      .every(d => {
+        const q = domainQuotas[d.toLowerCase()];
+        return q && (q.used >= q.limit || q.hourlyUsed >= q.hourlyLimit);
+      });
+    if (allFull && currentPoolDomains.length > 0) {
+      showToast("所有域名今日/本时配额已用完，请稍后再试");
+      return;
+    }
+
     // Pick randomly from enabled + quota-available domains
     const available = allDomains.filter(d => {
       if (!enabledDomains.has(d)) return false;
