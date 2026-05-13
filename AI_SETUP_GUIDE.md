@@ -98,6 +98,7 @@ Namecheap API 默认关闭，需要用户手动开启一次。给出以下指引
    → 打开 https://dash.cloudflare.com/profile/api-tokens
    → 页面底部 "Global API Key" → 点 View → 输入密码 → 复制
    请告诉我：Global API Key 和 Cloudflare 账号邮箱
+   （推荐使用 Global API Key，权限最全，无需额外配置）
 
 2. 管理员密码（登录本系统管理后台用）
    输入"自动生成"或告诉我你想用的密码
@@ -106,6 +107,21 @@ Namecheap API 默认关闭，需要用户手动开启一次。给出以下指引
 收到后：
 - 自动生成密码时，生成 16 位强密码（大小写+数字+符号），**醒目展示给用户，要求保存好**。
 - 存入变量：`$NC_USER`、`$NC_API_KEY`、`$CF_API_KEY`、`$CF_EMAIL`、`$ADMIN_PASSWORD`
+
+> **⚠️ 使用 API Token 而非 Global API Key 时**
+>
+> 若用户提供的是 Cloudflare API Token（细粒度 token），需确认 token 具备以下所有权限，缺少任一会在对应步骤报 permission denied：
+>
+> | 权限范围 | 所需权限 |
+> |---------|---------|
+> | Account | Workers Scripts: Edit |
+> | Account | D1: Edit |
+> | Account | Zone: Create（用于添加新域名） |
+> | Zone | DNS: Edit |
+> | Zone | Email Routing: Edit |
+> | Zone | Worker Routes: Edit |
+>
+> **强烈推荐首次部署使用 Global API Key**，以避免权限缺失导致的中途失败。
 
 ---
 
@@ -127,11 +143,18 @@ npx wrangler --version || npm install -g wrangler
 ```
 
 > **首次使用 Cloudflare Workers 的账号**：第一次部署 Worker 前，Cloudflare 要求注册一个 `workers.dev` 子域名。
-> 如果 `npm run deploy` 报错提示"subdomain not registered"，执行以下命令并按提示选择子域名：
+> 如果 `npm run deploy` 报错提示 "subdomain not registered"，通过 Cloudflare API 注册（`wrangler subdomain` 命令已在新版 wrangler 中废弃，不要使用）：
+>
 > ```bash
-> cd worker && npx wrangler subdomain && cd ..
+> # 将 YOUR_SUBDOMAIN 替换为你想用的子域名（全局唯一，建议用用户名或项目名）
+> curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/subdomain" \
+>   -H "X-Auth-Email: $CF_EMAIL" \
+>   -H "X-Auth-Key: $CF_API_KEY" \
+>   -H "Content-Type: application/json" \
+>   --data '{"subdomain":"YOUR_SUBDOMAIN"}'
 > ```
-> 完成后重新执行部署命令即可。这是一次性操作，后续部署无需重复。
+>
+> 确认响应 `"success":true` 后重新执行部署命令。这是一次性操作，后续部署无需重复。
 
 ---
 
@@ -378,6 +401,8 @@ export CLOUDFLARE_EMAIL="$CF_EMAIL"
 export CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT_ID"
 ```
 
+> **说明**：`CLOUDFLARE_ACCOUNT_ID` 环境变量优先级高于 `worker/wrangler.toml` 中的 `account_id` 字段。即使 toml 中仍为占位符 `YOUR_CLOUDFLARE_ACCOUNT_ID`，wrangler 也会使用环境变量中的真实值，不影响命令执行。`account_id` 字段会在 7.2 步骤中一并写入正确值。
+
 ### 7.1 创建 D1 数据库
 
 ```bash
@@ -442,6 +467,26 @@ echo "$ADMIN_PASSWORD" | cd worker && npx wrangler secret put ADMIN_PASSWORD && 
 
 确认命令输出 `✔ Success! Uploaded secret ADMIN_PASSWORD`。
 
+### 7.4.2（可选）为 Worker 绑定自定义 API 域名
+
+如果不想使用默认的 `workers.dev` URL，可以将 Worker 绑定到自己域名下的子域名（如 `api.yourdomain.com`），使前端 API 地址更干净稳定。
+
+在 `worker/wrangler.toml` 末尾添加：
+
+```toml
+[[routes]]
+pattern = "api.yourdomain.com"
+custom_domain = true
+```
+
+然后重新部署：
+
+```bash
+cd worker && npm run deploy && cd ..
+```
+
+完成后将 `$WORKER_URL` 更新为 `https://api.yourdomain.com`，并在后续 Phase 8 和 Phase 9 中使用这个地址替代 workers.dev 地址。
+
 ### 7.5 绑定 Email Routing Catch-all（必须在 7.4 之后执行）
 
 Worker 已存在后才能绑定，否则 Cloudflare 报错：
@@ -489,15 +534,36 @@ vercel whoami 2>/dev/null && echo "已登录，跳过 vercel login" || vercel lo
 
 ### 8.3 首次初始化项目
 
+> **⚠️ 必须显式传 `--name`，否则会出现双 https URL 无法访问**
+>
+> Vercel 默认从当前**目录名**派生项目名和访问 URL。若仓库目录名包含 `https`、`github-com` 等词（例如从 GitHub 链接克隆后未重命名的目录），生成的域名会变成：
+>
+> ```
+> https://https-github-com-yourname-tempm-xxxx.vercel.app
+> ```
+>
+> URL 里出现两个 `https`，浏览器无法解析，前端完全无法打开。**务必手动指定一个干净的项目名。**
+
 ```bash
-vercel --yes
+# 查看当前登录的账号名（用于后续 --scope）
+vercel whoami
+
+# 使用干净的项目名部署，避免从目录名自动派生
+vercel --yes --name temp-mail
+```
+
+如果报错 `missing_scope: Provide --scope or --team explicitly`：
+
+```bash
+# 查询可用 scope 列表
+vercel teams ls 2>/dev/null; vercel whoami
+
+# 指定 scope 重新部署（替换 YOUR_USERNAME 为 whoami 输出的账号名）
+vercel --yes --name temp-mail --scope YOUR_USERNAME
 ```
 
 按提示回答：
-- `Set up and deploy?` → Y
-- `Which scope?` → 个人账号
 - `Link to existing project?` → N
-- `Project name?` → temp-mail（或任意名称）
 - `Directory?` → ./（回车）
 
 ### 8.4 写入构建期环境变量
@@ -512,10 +578,14 @@ vercel env add NEXT_PUBLIC_WORKER_URL preview <<< "$WORKER_URL"
 ### 8.5 发布到生产
 
 ```bash
-vercel --prod --yes
+vercel --prod --yes --name temp-mail
 ```
 
+> **注意**：Vercel 可能在部署过程中提示需要连接 GitHub 账号。这是**非阻塞警告**，CLI 上传部署不依赖 GitHub 连接，直接忽略即可，部署会正常完成。只有当你需要 Git push 触发自动部署时才需要连接 GitHub。
+
 解析生产 URL，存入 `$VERCEL_URL`。
+
+> **验证 URL 格式**：确认 `$VERCEL_URL` 以 `https://` 开头且不包含第二个 `https`（即不是 `https://https-...`）。若 URL 异常，说明项目名未正确指定，在 Vercel Dashboard 将项目重命名为 `temp-mail` 后重新执行 `vercel --prod --yes --name temp-mail`。
 
 ---
 
@@ -551,6 +621,12 @@ dig MX $DOMAIN +short | grep cloudflare
 无需用户手动进管理面板，直接调用 admin API：
 
 ```bash
+# 安全检查：admin API 必须通过 HTTPS 调用，防止 bearer token 泄露
+if [[ "$WORKER_URL" != https://* ]]; then
+  echo "❌ WORKER_URL 必须以 https:// 开头才能安全发送 ADMIN_PASSWORD，请检查 Phase 7.4 的输出"
+  exit 1
+fi
+
 curl -s -X POST "$WORKER_URL/api/admin/config" \
   -H "Authorization: Bearer $ADMIN_PASSWORD" \
   -H "Content-Type: application/json" \
@@ -605,6 +681,8 @@ curl -s "$WORKER_URL/api/config" | python3 -c "import sys,json; print(json.load(
 **Worker 部署失败**：检查 `worker/wrangler.toml` 中 `account_id` 和 `database_id` 是否正确。
 
 **Namecheap API 报 `2030166` 错误**：IP 未在白名单，重新确认 Phase 1.2 第④步的 IP 是否与当前 `$MY_IP` 一致。
+
+**Vercel 域名带双重 https**（如 `https://https-github-com-....vercel.app`）：部署时未传 `--name`，目录名被当成项目名。在 Vercel Dashboard 将项目重命名为 `temp-mail`，然后重新执行 `vercel --prod --yes --name temp-mail`。
 
 ---
 

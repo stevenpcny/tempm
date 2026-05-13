@@ -2,17 +2,24 @@
  * Landing Worker — serves a lightweight landing page for root domains.
  *
  * Env vars (set via wrangler.toml [vars]):
- *   SITE_NAME    Display name shown in the page title and heading.
- *   MAIL_APP_URL Full URL of the temp-mail frontend (e.g. https://your-app.vercel.app).
- *   TAGLINE      One-line description shown under the heading (optional).
- *
- * The Worker is intentionally minimal so it deploys without any build step.
+ *   SITE_NAME     Default display name shown in the page title and heading.
+ *   MAIL_APP_URL  Full URL of the temp-mail frontend (e.g. https://your-app.vercel.app).
+ *   TAGLINE       Default one-line description shown under the heading (optional).
+ *   HOST_PROFILES JSON mapping hostname → { siteName?, tagline? } for per-domain customization.
+ *                 Example: {"example.com":{"siteName":"ExMail","tagline":"Fast disposable mail"}}
+ *                 Unrecognized hosts fall back to SITE_NAME / TAGLINE.
  */
 
 export interface Env {
   SITE_NAME: string;
   MAIL_APP_URL: string;
   TAGLINE?: string;
+  HOST_PROFILES?: string;
+}
+
+interface HostProfile {
+  siteName?: string;
+  tagline?: string;
 }
 
 export default {
@@ -24,9 +31,22 @@ export default {
       return Response.redirect(env.MAIL_APP_URL, 302);
     }
 
-    const siteName = env.SITE_NAME || '云端接码';
+    let siteName = env.SITE_NAME || '云端接码';
+    let tagline = env.TAGLINE || '免费、自托管的临时邮箱服务';
     const mailUrl = env.MAIL_APP_URL || '#';
-    const tagline = env.TAGLINE || '免费、自托管的临时邮箱服务';
+
+    if (env.HOST_PROFILES) {
+      try {
+        const profiles: Record<string, HostProfile> = JSON.parse(env.HOST_PROFILES);
+        const profile = profiles[url.hostname];
+        if (profile) {
+          if (profile.siteName) siteName = profile.siteName;
+          if (profile.tagline) tagline = profile.tagline;
+        }
+      } catch {
+        // malformed JSON — fall through to defaults
+      }
+    }
 
     const html = `<!DOCTYPE html>
 <html lang="zh-CN">
