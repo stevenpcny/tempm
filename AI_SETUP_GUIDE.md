@@ -524,6 +524,8 @@ vercel whoami 2>/dev/null && echo "已登录，跳过 vercel login" || vercel lo
 ```
 
 > `vercel whoami` 若已有有效 token 会输出当前账号名；若未登录则自动执行 `vercel login`，避免重复弹出浏览器授权窗口。
+>
+> **若环境无法打开浏览器**（如纯 CLI/SSH 环境，`vercel login` 卡住或报错）：改用 `vercel login --github` 走 GitHub OAuth，或在浏览器机器上登录后从 `~/.vercel/auth.json` / Vercel Dashboard → Settings → Tokens 取 token，再用 `vercel --token $VERCEL_TOKEN ...` 跑后续所有命令。注意：token 即使认证成功也可能没有任何可用 scope，此时仍会报 `missing_scope`，按 8.3 的 `--scope` 处理。
 
 告知用户：
 
@@ -653,6 +655,22 @@ curl -s -X POST "$WORKER_URL/api/admin/config" \
 没收到 = 告诉我，我来排查
 ```
 
+### 10.4 收尾报告（给后续 AI agent / 用户存档）
+
+部署完成后，输出一份关键信息汇总，避免后续接手者重新逆向推断：
+
+```
+部署信息汇总：
+- 域名：$DOMAIN
+- Worker URL：$WORKER_URL
+- 前端 URL：$VERCEL_URL
+- Cloudflare zone：$ZONE_ID
+- D1 database：$DATABASE_ID
+- 部署中遇到并解决的问题：（逐条列出，例如 catch-all code 2020、Vercel scope 等）
+```
+
+若用户反馈“没收到邮件”，按「故障排查」逐项核对后再改动配置，**不要凭猜测改代码**。
+
 ---
 
 ## 故障排查
@@ -683,6 +701,27 @@ curl -s "$WORKER_URL/api/config" | python3 -c "import sys,json; print(json.load(
 **Namecheap API 报 `2030166` 错误**：IP 未在白名单，重新确认 Phase 1.2 第④步的 IP 是否与当前 `$MY_IP` 一致。
 
 **Vercel 域名带双重 https**（如 `https://https-github-com-....vercel.app`）：部署时未传 `--name`，目录名被当成项目名。在 Vercel Dashboard 将项目重命名为 `temp-mail`，然后重新执行 `vercel --prod --yes --name temp-mail`。
+
+**Catch-all 绑定报 `code 2020 / Invalid rule operation`**：这不是 NS/MX 传播问题，**不要让用户等待或手动操作**。根因是 Phase 7.5 在 Worker 尚未部署时就调用了绑定 API，或 Worker 名称与 `actions.value` 不一致。确认 `cd worker && npm run deploy` 已成功、`temp-mail-worker` 这个名字与 `worker/wrangler.toml` 的 `name` 字段一致，然后重新执行 7.5 的 PUT 请求即可。
+
+---
+
+## 追加收信域名（首次部署完成之后）
+
+本指南覆盖的是**首个域名**的全新部署。若系统已上线、只是想再挂一个收信域名，**不要重跑整个流程**——重点是只做增量步骤：
+
+1. 新域名同样要走 Phase 4（建 zone）、Phase 5（改 NS）、Phase 6（等 NS 生效）、Phase 7.5（绑定 catch-all 到**同一个** `temp-mail-worker`，Worker 无需重新部署）。
+2. **不需要**重建 D1、不需要重新部署前端、不需要新建 Vercel 项目。
+3. 通过 admin API 把新域名追加进配置（注意要带上已有域名，POST 是整体覆盖）：
+   ```bash
+   curl -s -X POST "$WORKER_URL/api/admin/config" \
+     -H "Authorization: Bearer $ADMIN_PASSWORD" \
+     -H "Content-Type: application/json" \
+     --data "{\"domains\":[\"existing.com\",\"$NEW_DOMAIN\"]}"
+   ```
+4. CORS 不受影响（域名变的是收信端，不是前端）。
+
+> 项目内已有 `add-email-domain` 技能封装了上述增量流程，用户说“加域名”时应优先调用该技能，而不是手工照搬本指南。
 
 ---
 
