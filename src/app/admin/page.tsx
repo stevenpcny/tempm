@@ -1,9 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-
-const WORKER_URL =
-  process.env.NEXT_PUBLIC_WORKER_URL || "http://localhost:8787";
+import { WORKER_URL } from "@/lib/config";
 
 interface ForwardRule {
   subdomain: string;
