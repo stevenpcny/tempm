@@ -407,7 +407,7 @@ function EmailPanel({ address, adminToken, onClose }: { address: string; adminTo
 }
 
 // ── SearchInboxPanel (look up any address under a registered domain) ───────
-function SearchInboxPanel({ allDomains }: { allDomains: string[] }) {
+function SearchInboxPanel({ allDomains, adminToken }: { allDomains: string[]; adminToken: string }) {
   const [prefix, setPrefix] = useState("");
   const [domain, setDomain] = useState("");
   const [activeAddress, setActiveAddress] = useState<string | null>(null);
@@ -461,7 +461,7 @@ function SearchInboxPanel({ allDomains }: { allDomains: string[] }) {
       </div>
       {error && <p className="text-red-500 text-xs mt-2">{error}</p>}
       {activeAddress && (
-        <EmailPanel key={activeAddress} address={activeAddress}
+        <EmailPanel key={activeAddress} address={activeAddress} adminToken={adminToken}
           onClose={() => setActiveAddress(null)} />
       )}
     </div>
@@ -1005,7 +1005,7 @@ export default function Home() {
         )}
 
         {/* Search any inbox under a registered domain */}
-        <SearchInboxPanel allDomains={allDomains} />
+        <SearchInboxPanel allDomains={allDomains} adminToken={adminToken} />
 
         {/* Entry list header */}
         <div className="mb-3">
