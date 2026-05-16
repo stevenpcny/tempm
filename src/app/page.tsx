@@ -413,7 +413,69 @@ function EmailPanel({ address, onClose }: { address: string; onClose: () => void
   );
 }
 
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+// ── SearchInboxPanel (look up any address under a registered domain) ───────
+function SearchInboxPanel({ allDomains }: { allDomains: string[] }) {
+  const [prefix, setPrefix] = useState("");
+  const [domain, setDomain] = useState("");
+  const [activeAddress, setActiveAddress] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!domain && allDomains.length > 0) setDomain(allDomains[0]);
+  }, [allDomains, domain]);
+
+  const submit = () => {
+    setError(null);
+    const raw = prefix.trim().toLowerCase();
+    if (!raw) { setError("请输入邮箱名"); return; }
+    let address: string;
+    if (raw.includes("@")) {
+      const [name, dom] = raw.split("@");
+      if (!name || !dom) { setError("邮箱格式不正确"); return; }
+      if (!allDomains.includes(dom)) { setError(`域名 @${dom} 未在系统中注册`); return; }
+      address = `${name}@${dom}`;
+    } else {
+      if (!domain) { setError("请选择域名"); return; }
+      address = `${raw}@${domain}`;
+    }
+    if (!/^[a-z0-9._-]+@/.test(address)) { setError("邮箱名只能包含字母、数字和 . _ -"); return; }
+    setActiveAddress(address);
+  };
+
+  return (
+    <div className="card mb-6">
+      <h2 className="text-base font-semibold text-gray-700 mb-3">🔍 查询邮箱收信</h2>
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          type="text"
+          value={prefix}
+          onChange={e => setPrefix(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && submit()}
+          placeholder="邮箱名 或 完整地址"
+          className="flex-1 min-w-[160px] border rounded-xl px-3 py-2 text-sm outline-none font-mono"
+          style={{ borderColor: "#e0e0e0" }}
+        />
+        <span className="text-gray-400 text-sm">@</span>
+        <select
+          value={domain}
+          onChange={e => setDomain(e.target.value)}
+          disabled={prefix.includes("@")}
+          className="border rounded-xl px-2 py-2 text-sm outline-none font-mono bg-white"
+          style={{ borderColor: "#e0e0e0", color: "var(--primary-dark)" }}>
+          {allDomains.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <button onClick={submit} className="btn-primary text-sm px-4 py-2">📬 查看收件箱</button>
+      </div>
+      {error && <p className="text-red-500 text-xs mt-2">{error}</p>}
+      {activeAddress && (
+        <EmailPanel key={activeAddress} address={activeAddress}
+          onClose={() => setActiveAddress(null)} />
+      )}
+    </div>
+  );
+}
+
+const IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 
 // ── TagEmailsPanel (all emails for all addresses under a tag) ───────────────
 interface TagEmailMeta { id: string; to: string; from: string; subject: string; timestamp: number; toAddress: string; activationLink: string | null; }
@@ -912,6 +974,9 @@ export default function Home() {
             <TagEmailsPanel key={`inbox-${activeTag}`} tag={activeTag} onConnStateChange={setSseState} />
           </>
         )}
+
+        {/* Search any inbox under a registered domain */}
+        <SearchInboxPanel allDomains={allDomains} />
 
         {/* Entry list header */}
         <div className="mb-3">
