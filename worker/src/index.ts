@@ -534,9 +534,11 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     }
     const now = Date.now();
     // Save as unconfirmed (confirmed=0); quota is checked and consumed only when email arrives
+    const addrLc = body.address.toLowerCase();
+    const addrDomain = addrLc.includes("@") ? addrLc.slice(addrLc.indexOf("@") + 1) : "";
     await env.DB.prepare(
-      "INSERT INTO passwords (address, password, label, confirmed, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)"
-    ).bind(address, body.password, body.label || "", now, now).run();
+      "INSERT INTO passwords (address, password, label, confirmed, created_at, updated_at, domain) VALUES (?, ?, ?, 0, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET password=excluded.password, label=excluded.label, updated_at=excluded.updated_at, domain=excluded.domain"
+    ).bind(addrLc, body.password, body.label || "", now, now, addrDomain).run();
     return Response.json({ ok: true }, { headers });
   }
 
@@ -645,8 +647,8 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
     const result = await env.DB.prepare(
-      "SELECT COUNT(*) as count FROM passwords WHERE address LIKE ? AND created_at >= ?"
-    ).bind(`%@${domain}`, todayStart.getTime()).first() as { count: number } | null;
+      "SELECT COUNT(*) as count FROM passwords WHERE domain = ? AND created_at >= ?"
+    ).bind(domain, todayStart.getTime()).first() as { count: number } | null;
     const used = result?.count || 0;
     const { domainDaily } = await getLimits(env.DB);
     const limit = domainDaily;
@@ -663,10 +665,10 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
     const [dailyRows, hourlyRows] = await Promise.all([
       env.DB.prepare(
-        "SELECT LOWER(SUBSTR(address, INSTR(address, '@') + 1)) as domain, COUNT(*) as count FROM passwords WHERE confirmed = 1 AND created_at >= ? GROUP BY domain"
+        "SELECT domain, COUNT(*) as count FROM passwords WHERE confirmed = 1 AND created_at >= ? AND domain IS NOT NULL GROUP BY domain"
       ).bind(todayStart.getTime()).all(),
       env.DB.prepare(
-        "SELECT LOWER(SUBSTR(address, INSTR(address, '@') + 1)) as domain, COUNT(*) as count FROM passwords WHERE confirmed = 1 AND created_at >= ? GROUP BY domain"
+        "SELECT domain, COUNT(*) as count FROM passwords WHERE confirmed = 1 AND created_at >= ? AND domain IS NOT NULL GROUP BY domain"
       ).bind(hourStart.getTime()).all(),
     ]);
 
@@ -921,13 +923,13 @@ export default {
         const todayStart = new Date(); todayStart.setUTCHours(0, 0, 0, 0);
         const hourStart = new Date(); hourStart.setMinutes(0, 0, 0);
         const [dailyRow, hourlyRow] = await Promise.all([
-          env.DB.prepare("SELECT COUNT(*) as count FROM passwords WHERE confirmed = 1 AND address LIKE ? AND created_at >= ?").bind(`%@${domain}`, todayStart.getTime()).first() as Promise<{ count: number } | null>,
-          env.DB.prepare("SELECT COUNT(*) as count FROM passwords WHERE confirmed = 1 AND address LIKE ? AND created_at >= ?").bind(`%@${domain}`, hourStart.getTime()).first() as Promise<{ count: number } | null>,
+          env.DB.prepare("SELECT COUNT(*) as count FROM passwords WHERE confirmed = 1 AND domain = ? AND created_at >= ?").bind(domain, todayStart.getTime()).first() as Promise<{ count: number } | null>,
+          env.DB.prepare("SELECT COUNT(*) as count FROM passwords WHERE confirmed = 1 AND domain = ? AND created_at >= ?").bind(domain, hourStart.getTime()).first() as Promise<{ count: number } | null>,
         ]);
         if ((dailyRow?.count || 0) >= domainDaily || (hourlyRow?.count || 0) >= domainHourly) return;
         await env.DB.prepare(
-          "INSERT INTO passwords (address, password, label, confirmed, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)"
-        ).bind(accountAddress, generatePassword(), tag, now, now).run();
+          "INSERT INTO passwords (address, password, label, confirmed, created_at, updated_at, domain) VALUES (?, ?, ?, 1, ?, ?, ?)"
+        ).bind(accountAddress, generatePassword(), tag, now, now, domain).run();
       }
     }
 

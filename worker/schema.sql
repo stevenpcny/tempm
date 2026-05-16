@@ -33,12 +33,14 @@ CREATE TABLE IF NOT EXISTS passwords (
   confirmed INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  last_link_received_at INTEGER
+  last_link_received_at INTEGER,
+  domain TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_passwords_label_confirmed_created ON passwords(label, confirmed, created_at);
 CREATE INDEX IF NOT EXISTS idx_passwords_confirmed_updated ON passwords(confirmed, updated_at);
 CREATE INDEX IF NOT EXISTS idx_passwords_confirmed_created ON passwords(confirmed, created_at);
+CREATE INDEX IF NOT EXISTS idx_passwords_domain_confirmed_created ON passwords(domain, confirmed, created_at);
 
 -- Auto cleanup: delete emails older than configured hours
 -- This is done via a cron trigger in the worker
