@@ -59,17 +59,26 @@ function corsHeaders(request: Request, env: Env): Record<string, string> {
   };
 }
 
-async function streamToText(stream: ReadableStream | null): Promise<string> {
+async function streamToText(stream: ReadableStream | null, maxChars = MAX_RAW_EMAIL_CHARS): Promise<string> {
   if (!stream) return "";
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let result = "";
+  let truncated = false;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    result += decoder.decode(value, { stream: true });
+    const chunk = decoder.decode(value, { stream: true });
+    if (result.length + chunk.length > maxChars) {
+      result += chunk.slice(0, Math.max(0, maxChars - result.length));
+      truncated = true;
+      try { await reader.cancel("message too large"); } catch {}
+      break;
+    }
+    result += chunk;
   }
-  return result;
+  if (!truncated) result += decoder.decode();
+  return truncated ? `${result}\n\n[truncated]` : result;
 }
 
 // ========== D1 Config Helpers ==========
@@ -144,13 +153,23 @@ async function checkAuthFull(request: Request, env: Env): Promise<boolean> {
   if (checkAuth(request, env)) return true;
   const auth = request.headers.get("Authorization") || "";
   if (!auth.startsWith("Bearer ")) return false;
-  const password = auth.slice(7);
+  return await checkPassword(auth.slice(7), env);
+}
+
+async function checkPassword(password: string, env: Env): Promise<boolean> {
+  if (password === env.ADMIN_PASSWORD) return true;
   const storedHash = await getConfig(env.DB, "site_password_hash");
   if (!storedHash) return false;
   const data = new TextEncoder().encode(password);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
   return hashHex === storedHash;
+}
+
+async function checkAuthFullOrQueryToken(request: Request, env: Env, url: URL): Promise<boolean> {
+  if (await checkAuthFull(request, env)) return true;
+  const token = url.searchParams.get("token") || "";
+  return token ? await checkPassword(token, env) : false;
 }
 
 
@@ -179,6 +198,13 @@ function getLastEasternReset(): number {
   return new Date(resetStr).getTime() + etToUTCOffsetMs;
 }
 
+const MAX_RAW_EMAIL_CHARS = 256 * 1024;
+const MAX_STORED_BODY_CHARS = 128 * 1024;
+const MAX_STORED_SUBJECT_CHARS = 500;
+const STREAM_POLL_MS = 15_000;
+const EMAIL_LIST_LIMIT = 200;
+
+
 // ========== Email parsing ==========
 
 function decodeQP(str: string): string {
@@ -187,6 +213,11 @@ function decodeQP(str: string): string {
     .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) =>
       String.fromCharCode(parseInt(hex, 16))
     );
+}
+
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}\n\n[truncated]`;
 }
 
 function parseEmailContent(rawEmail: string) {
@@ -255,7 +286,11 @@ function parseEmailContent(rawEmail: string) {
     }
   }
 
-  return { subject, textBody, htmlBody };
+  return {
+    subject: truncateText(subject, MAX_STORED_SUBJECT_CHARS),
+    textBody: truncateText(textBody, MAX_STORED_BODY_CHARS),
+    htmlBody: truncateText(htmlBody, MAX_STORED_BODY_CHARS),
+  };
 }
 
 // ========== HTTP Request Handler ==========
@@ -283,7 +318,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
       forwardDomains: forwardRules.map((r) => r.subdomain),
       siteName: siteName || "云端接码",
       autoDeleteHours: parseInt(autoDeleteHours) || 24,
-      linkFilter: linkFilter || "https://auth.heygen.com/",
+      linkFilter: linkFilter || "auth.heygen.com",
       hasPassword: sitePasswordHash !== "",
     }, { headers });
   }
@@ -309,6 +344,9 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
   // GET /api/emails?address=xxx@domain.com
   if (url.pathname === "/api/emails" && request.method === "GET") {
+    if (!await checkAuthFull(request, env)) {
+      return Response.json({ error: "unauthorized" }, { status: 401, headers });
+    }
     const address = (url.searchParams.get("address") || "").toLowerCase();
     if (!address) {
       return Response.json({ error: "address required" }, { status: 400, headers });
@@ -362,7 +400,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
         domains, domainsPool2, forwardRules, tagRules,
         siteName: siteName || "云端接码",
         autoDeleteHours: parseInt(autoDeleteHours) || 24,
-        linkFilter: linkFilter || "https://auth.heygen.com/",
+        linkFilter: linkFilter || "auth.heygen.com",
         hasSitePassword,
         tagDailyLimit: tagDaily,
         domainDailyLimit: domainDaily,
@@ -517,26 +555,30 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
   // GET /api/tag-emails?tag=ck — metadata + activation link (supports both new label-based and old dash-tag format)
   if (url.pathname === "/api/tag-emails" && request.method === "GET") {
+    if (!await checkAuthFull(request, env)) {
+      return Response.json({ error: "unauthorized" }, { status: 401, headers });
+    }
     const tag = (url.searchParams.get("tag") || "").toLowerCase();
     if (!tag) return Response.json({ error: "tag required" }, { status: 400, headers });
 
     // New format: address has no tag, tag stored in passwords.label
     const newRows = await env.DB.prepare(
-      "SELECT e.id, e.mail_to as 'to', e.mail_from as 'from', e.subject, e.text_body, e.html_body, e.timestamp FROM emails e INNER JOIN passwords p ON p.address = e.mail_to WHERE p.label = ? ORDER BY e.timestamp DESC LIMIT 200"
-    ).bind(tag).all();
+      "SELECT e.id, e.mail_to as 'to', e.mail_from as 'from', e.subject, e.text_body, e.html_body, e.timestamp FROM emails e INNER JOIN passwords p ON p.address = e.mail_to WHERE p.label = ? ORDER BY e.timestamp DESC LIMIT ?"
+    ).bind(tag, EMAIL_LIST_LIMIT).all();
 
     // Old format: tag embedded in address as -tag@ (backwards compat)
     const oldRows = await env.DB.prepare(
-      "SELECT id, mail_to as 'to', mail_from as 'from', subject, text_body, html_body, timestamp FROM emails WHERE mail_to LIKE ? ORDER BY timestamp DESC LIMIT 200"
-    ).bind(`%-${tag}@%`).all();
+      "SELECT id, mail_to as 'to', mail_from as 'from', subject, text_body, html_body, timestamp FROM emails WHERE mail_to LIKE ? ORDER BY timestamp DESC LIMIT ?"
+    ).bind(`%-${tag}@%`, EMAIL_LIST_LIMIT).all();
 
     // Merge, deduplicate by id, sort by timestamp desc
     const seen = new Set<unknown>();
     const merged = [...(newRows.results || []), ...(oldRows.results || [])]
       .filter(r => { if (seen.has((r as Record<string, unknown>).id)) return false; seen.add((r as Record<string, unknown>).id); return true; })
       .sort((a, b) => ((b as Record<string, unknown>).timestamp as number) - ((a as Record<string, unknown>).timestamp as number))
-      .slice(0, 200);
+      .slice(0, EMAIL_LIST_LIMIT);
 
+    const linkFilter = (await getConfig(env.DB, "link_filter")) || "auth.heygen.com";
     const emails = merged.map((row: Record<string, unknown>) => {
       const content = ((row.html_body as string) || "") + " " + ((row.text_body as string) || "");
       const m = content.match(/https:\/\/auth\.heygen\.com\/[^\s"'<>)]+/);
@@ -548,8 +590,40 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     return Response.json({ emails }, { headers });
   }
 
+  // GET /api/all-emails — metadata + activation link for all received emails
+  if (url.pathname === "/api/all-emails" && request.method === "GET") {
+    if (!await checkAuthFull(request, env)) {
+      return Response.json({ error: "unauthorized" }, { status: 401, headers });
+    }
+
+    const rows = await env.DB.prepare(
+      "SELECT id, mail_to as 'to', mail_from as 'from', subject, text_body, html_body, timestamp FROM emails ORDER BY timestamp DESC LIMIT ?"
+    ).bind(EMAIL_LIST_LIMIT).all();
+
+    const linkFilter = (await getConfig(env.DB, "link_filter")) || "auth.heygen.com";
+    const emails = ((rows.results || []) as Record<string, unknown>[]).map((row) => {
+      const content = ((row.html_body as string) || "") + " " + ((row.text_body as string) || "");
+      let activationLink: string | null = null;
+      if (linkFilter) {
+        const re = /https?:\/\/[^\s"'<>)]+/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(content)) !== null) {
+          if (m[0].includes(linkFilter)) { activationLink = m[0].replace(/[.,;!?]+$/, ""); break; }
+        }
+      }
+      return {
+        id: row.id, to: row.to, from: row.from, subject: row.subject, timestamp: row.timestamp,
+        activationLink,
+      };
+    });
+    return Response.json({ emails }, { headers });
+  }
+
   // GET /api/email-detail?id=xxx — full email content (html + text) on demand
   if (url.pathname === "/api/email-detail" && request.method === "GET") {
+    if (!await checkAuthFull(request, env)) {
+      return Response.json({ error: "unauthorized" }, { status: 401, headers });
+    }
     const id = url.searchParams.get("id") || "";
     if (!id) return Response.json({ error: "id required" }, { status: 400, headers });
     const row = await env.DB.prepare(
@@ -658,6 +732,9 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
   // GET /api/stream?tag=xxx&since=timestamp — SSE push for new emails
   if (url.pathname === "/api/stream" && request.method === "GET") {
+    if (!await checkAuthFullOrQueryToken(request, env, url)) {
+      return Response.json({ error: "unauthorized" }, { status: 401, headers });
+    }
     const tag = (url.searchParams.get("tag") || "").toLowerCase();
     if (!tag) return Response.json({ error: "tag required" }, { status: 400, headers });
 
@@ -681,14 +758,14 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
         const linkFilter = await getConfig(env.DB, "link_filter");
 
         while (!closed) {
-          await new Promise<void>(r => setTimeout(r, 15000));
+          await new Promise<void>(r => setTimeout(r, STREAM_POLL_MS));
           if (closed) break;
 
           try {
             const rows = await env.DB.prepare(
               "SELECT e.id, e.mail_to as 'to', e.mail_from as 'from', e.subject, e.html_body, e.text_body, e.timestamp " +
               "FROM emails e INNER JOIN passwords p ON p.address = e.mail_to " +
-              "WHERE p.label = ? AND e.timestamp > ? ORDER BY e.timestamp ASC LIMIT 20"
+              "WHERE p.label = ? AND e.timestamp > ? ORDER BY e.timestamp ASC LIMIT 10"
             ).bind(tag, lastTs).all();
 
             for (const row of (rows.results || []) as Record<string, unknown>[]) {
@@ -733,10 +810,12 @@ export default {
     const [localPart, domain] = to.split("@");
     const { tagDaily, domainDaily, domainHourly } = await getLimits(env.DB);
 
-    const domains = await getDomains(env.DB);
-    const domainsPool2 = await getDomainsPool2(env.DB);
-    const forwardRules = await getForwardRules(env.DB);
-    const tagRules = await getTagRules(env.DB);
+    const [domains, domainsPool2, forwardRules, tagRules] = await Promise.all([
+      getDomains(env.DB),
+      getDomainsPool2(env.DB),
+      getForwardRules(env.DB),
+      getTagRules(env.DB),
+    ]);
 
     const knownTags = tagRules.map((r) => r.tag.toLowerCase());
 
@@ -853,7 +932,7 @@ export default {
     ).bind(generateId(), accountAddress, message.from, subject, textBody, htmlBody, now).run();
 
     // Update last_link_received_at if email contains a link matching linkFilter
-    const linkFilter = await getConfig(env.DB, "link_filter");
+    const linkFilter = (await getConfig(env.DB, "link_filter")) || "auth.heygen.com";
     if (linkFilter) {
       const content = htmlBody + textBody;
       const re = /https?:\/\/[^\s"'<>)]+/g;

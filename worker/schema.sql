@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS emails (
 
 CREATE INDEX IF NOT EXISTS idx_emails_to ON emails(mail_to);
 CREATE INDEX IF NOT EXISTS idx_emails_timestamp ON emails(timestamp);
+CREATE INDEX IF NOT EXISTS idx_emails_to_timestamp ON emails(mail_to, timestamp);
 
 -- Config table for admin panel (key-value store)
 CREATE TABLE IF NOT EXISTS config (
@@ -36,7 +37,8 @@ CREATE TABLE IF NOT EXISTS passwords (
   domain TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_passwords_label ON passwords(label);
+CREATE INDEX IF NOT EXISTS idx_passwords_label_confirmed_created ON passwords(label, confirmed, created_at);
+CREATE INDEX IF NOT EXISTS idx_passwords_confirmed_updated ON passwords(confirmed, updated_at);
 CREATE INDEX IF NOT EXISTS idx_passwords_confirmed_created ON passwords(confirmed, created_at);
 CREATE INDEX IF NOT EXISTS idx_passwords_domain_confirmed_created ON passwords(domain, confirmed, created_at);
 

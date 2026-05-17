@@ -1,9 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-
-const WORKER_URL =
-  process.env.NEXT_PUBLIC_WORKER_URL || "http://localhost:8787";
+import { WORKER_URL } from "@/lib/config";
 
 interface ForwardRule {
   subdomain: string;
@@ -41,7 +39,7 @@ export default function AdminPage() {
     tagRules: [],
     siteName: "云端接码",
     autoDeleteHours: 24,
-    linkFilter: "",
+    linkFilter: "auth.heygen.com",
     hasSitePassword: false,
   });
   const [newSitePassword, setNewSitePassword] = useState("");
@@ -281,6 +279,9 @@ export default function AdminPage() {
           </h1>
           <input
             type="password"
+            autoComplete="off"
+            data-lpignore="true"
+            data-1p-ignore="true"
             placeholder="输入管理密码"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -377,7 +378,7 @@ export default function AdminPage() {
               type="text"
               value={config.linkFilter}
               onChange={(e) => setConfig({ ...config, linkFilter: e.target.value })}
-              placeholder="如：auth.example.com  留空则不提取激活链接"
+              placeholder="如：auth.heygen.com  留空则不提取激活链接"
               className="email-input"
               style={{ textAlign: "left", fontSize: "14px" }}
             />

@@ -75,6 +75,18 @@ Namecheap API 默认关闭，需要用户手动开启一次。给出以下指引
 
 > **注意**：在 1.2 开始前，先运行 `curl -s https://api.ipify.org` 获取当前 IP，填入上面第④步。
 
+> **⚠️ Namecheap API 不可用时的回退路径**
+>
+> 部分账号（通常是新账号或消费未满 $50 的账号）无法开启 API Access——页面上的开关是灰色的或操作后报错。
+> 遇到此情况，**不要继续尝试 API**，切换为手动流程：
+>
+> 1. 引导用户在 Namecheap 网页手动购买域名（Phase 3 跳过，改为提示用户完成购买后告知域名）。
+> 2. Phase 5（NS 修改）同样改为手动：
+>    - 登录 Namecheap → Domain List → 点域名旁 "Manage" → "Nameservers" 选 "Custom DNS"
+>    - 填入 `$NS1` 和 `$NS2`，保存
+>    - 提示用户完成后告知你，继续 Phase 6
+> 3. 跳过所有 `$NC_USER` / `$NC_API_KEY` 变量的收集，本次部署不需要它们。
+
 ### 1.3 收集其余凭据
 
 ```
@@ -86,6 +98,7 @@ Namecheap API 默认关闭，需要用户手动开启一次。给出以下指引
    → 打开 https://dash.cloudflare.com/profile/api-tokens
    → 页面底部 "Global API Key" → 点 View → 输入密码 → 复制
    请告诉我：Global API Key 和 Cloudflare 账号邮箱
+   （推荐使用 Global API Key，权限最全，无需额外配置）
 
 2. 管理员密码（登录本系统管理后台用）
    输入"自动生成"或告诉我你想用的密码
@@ -94,6 +107,21 @@ Namecheap API 默认关闭，需要用户手动开启一次。给出以下指引
 收到后：
 - 自动生成密码时，生成 16 位强密码（大小写+数字+符号），**醒目展示给用户，要求保存好**。
 - 存入变量：`$NC_USER`、`$NC_API_KEY`、`$CF_API_KEY`、`$CF_EMAIL`、`$ADMIN_PASSWORD`
+
+> **⚠️ 使用 API Token 而非 Global API Key 时**
+>
+> 若用户提供的是 Cloudflare API Token（细粒度 token），需确认 token 具备以下所有权限，缺少任一会在对应步骤报 permission denied：
+>
+> | 权限范围 | 所需权限 |
+> |---------|---------|
+> | Account | Workers Scripts: Edit |
+> | Account | D1: Edit |
+> | Account | Zone: Create（用于添加新域名） |
+> | Zone | DNS: Edit |
+> | Zone | Email Routing: Edit |
+> | Zone | Worker Routes: Edit |
+>
+> **强烈推荐首次部署使用 Global API Key**，以避免权限缺失导致的中途失败。
 
 ---
 
@@ -113,6 +141,20 @@ cd worker && npm install && cd ..
 # 检查 wrangler
 npx wrangler --version || npm install -g wrangler
 ```
+
+> **首次使用 Cloudflare Workers 的账号**：第一次部署 Worker 前，Cloudflare 要求注册一个 `workers.dev` 子域名。
+> 如果 `npm run deploy` 报错提示 "subdomain not registered"，通过 Cloudflare API 注册（`wrangler subdomain` 命令已在新版 wrangler 中废弃，不要使用）：
+>
+> ```bash
+> # 将 YOUR_SUBDOMAIN 替换为你想用的子域名（全局唯一，建议用用户名或项目名）
+> curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/subdomain" \
+>   -H "X-Auth-Email: $CF_EMAIL" \
+>   -H "X-Auth-Key: $CF_API_KEY" \
+>   -H "Content-Type: application/json" \
+>   --data '{"subdomain":"YOUR_SUBDOMAIN"}'
+> ```
+>
+> 确认响应 `"success":true` 后重新执行部署命令。这是一次性操作，后续部署无需重复。
 
 ---
 
@@ -337,6 +379,16 @@ curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/email/routi
 
 Cloudflare 自动添加 MX 和 SPF 记录。
 
+### 6.3 Email Routing 就绪检查清单（按顺序确认，全部通过再进入 Phase 7）
+
+- [ ] **Cloudflare zone 状态为 active**（6.1 已确认）
+- [ ] **Email Routing 已启用**（6.2 API 返回 `success: true`）
+- [ ] **Worker 已部署**（Phase 7.4 完成后回来确认）
+- [ ] **Catch-all 规则已绑定到 Worker**（Phase 7.5 完成后回来确认）
+- [ ] **MX 记录已生效**：`dig MX $DOMAIN +short` 包含 `cloudflare.com`
+
+> Catch-all 规则和 MX 记录检查需等 Phase 7 完成后才能验证，Phase 7 结束后务必回来补充确认。
+
 ---
 
 ## Phase 7：创建 D1 数据库并部署 Worker（全自动）
@@ -348,6 +400,8 @@ export CLOUDFLARE_API_KEY="$CF_API_KEY"
 export CLOUDFLARE_EMAIL="$CF_EMAIL"
 export CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT_ID"
 ```
+
+> **说明**：`CLOUDFLARE_ACCOUNT_ID` 环境变量优先级高于 `worker/wrangler.toml` 中的 `account_id` 字段。即使 toml 中仍为占位符 `YOUR_CLOUDFLARE_ACCOUNT_ID`，wrangler 也会使用环境变量中的真实值，不影响命令执行。`account_id` 字段会在 7.2 步骤中一并写入正确值。
 
 ### 7.1 创建 D1 数据库
 
@@ -386,7 +440,7 @@ crons = ["0 3 * * *"]
 
 [vars]
 ALLOWED_ORIGINS = "http://localhost:3000"
-ADMIN_PASSWORD = "$ADMIN_PASSWORD"
+# ADMIN_PASSWORD 通过 wrangler secret 注入，不写入此文件
 ```
 
 ### 7.3 初始化数据库表结构
@@ -402,6 +456,36 @@ cd worker && npm run deploy && cd ..
 ```
 
 解析输出中的 Worker URL，存入 `$WORKER_URL`。
+
+### 7.4.1 注入 ADMIN_PASSWORD Secret
+
+Worker 部署后立即写入管理员密码（不可在 `wrangler.toml` 明文存放）：
+
+```bash
+echo "$ADMIN_PASSWORD" | cd worker && npx wrangler secret put ADMIN_PASSWORD && cd ..
+```
+
+确认命令输出 `✔ Success! Uploaded secret ADMIN_PASSWORD`。
+
+### 7.4.2（可选）为 Worker 绑定自定义 API 域名
+
+如果不想使用默认的 `workers.dev` URL，可以将 Worker 绑定到自己域名下的子域名（如 `api.yourdomain.com`），使前端 API 地址更干净稳定。
+
+在 `worker/wrangler.toml` 末尾添加：
+
+```toml
+[[routes]]
+pattern = "api.yourdomain.com"
+custom_domain = true
+```
+
+然后重新部署：
+
+```bash
+cd worker && npm run deploy && cd ..
+```
+
+完成后将 `$WORKER_URL` 更新为 `https://api.yourdomain.com`，并在后续 Phase 8 和 Phase 9 中使用这个地址替代 workers.dev 地址。
 
 ### 7.5 绑定 Email Routing Catch-all（必须在 7.4 之后执行）
 
@@ -436,8 +520,12 @@ echo "NEXT_PUBLIC_WORKER_URL=$WORKER_URL" > .env.local
 
 ```bash
 npm install -g vercel
-vercel login
+vercel whoami 2>/dev/null && echo "已登录，跳过 vercel login" || vercel login
 ```
+
+> `vercel whoami` 若已有有效 token 会输出当前账号名；若未登录则自动执行 `vercel login`，避免重复弹出浏览器授权窗口。
+>
+> **若环境无法打开浏览器**（如纯 CLI/SSH 环境，`vercel login` 卡住或报错）：改用 `vercel login --github` 走 GitHub OAuth，或在浏览器机器上登录后从 `~/.vercel/auth.json` / Vercel Dashboard → Settings → Tokens 取 token，再用 `vercel --token $VERCEL_TOKEN ...` 跑后续所有命令。注意：token 即使认证成功也可能没有任何可用 scope，此时仍会报 `missing_scope`，按 8.3 的 `--scope` 处理。
 
 告知用户：
 
@@ -448,15 +536,36 @@ vercel login
 
 ### 8.3 首次初始化项目
 
+> **⚠️ 必须显式传 `--name`，否则会出现双 https URL 无法访问**
+>
+> Vercel 默认从当前**目录名**派生项目名和访问 URL。若仓库目录名包含 `https`、`github-com` 等词（例如从 GitHub 链接克隆后未重命名的目录），生成的域名会变成：
+>
+> ```
+> https://https-github-com-yourname-tempm-xxxx.vercel.app
+> ```
+>
+> URL 里出现两个 `https`，浏览器无法解析，前端完全无法打开。**务必手动指定一个干净的项目名。**
+
 ```bash
-vercel --yes
+# 查看当前登录的账号名（用于后续 --scope）
+vercel whoami
+
+# 使用干净的项目名部署，避免从目录名自动派生
+vercel --yes --name temp-mail
+```
+
+如果报错 `missing_scope: Provide --scope or --team explicitly`：
+
+```bash
+# 查询可用 scope 列表
+vercel teams ls 2>/dev/null; vercel whoami
+
+# 指定 scope 重新部署（替换 YOUR_USERNAME 为 whoami 输出的账号名）
+vercel --yes --name temp-mail --scope YOUR_USERNAME
 ```
 
 按提示回答：
-- `Set up and deploy?` → Y
-- `Which scope?` → 个人账号
 - `Link to existing project?` → N
-- `Project name?` → temp-mail（或任意名称）
 - `Directory?` → ./（回车）
 
 ### 8.4 写入构建期环境变量
@@ -471,10 +580,14 @@ vercel env add NEXT_PUBLIC_WORKER_URL preview <<< "$WORKER_URL"
 ### 8.5 发布到生产
 
 ```bash
-vercel --prod --yes
+vercel --prod --yes --name temp-mail
 ```
 
+> **注意**：Vercel 可能在部署过程中提示需要连接 GitHub 账号。这是**非阻塞警告**，CLI 上传部署不依赖 GitHub 连接，直接忽略即可，部署会正常完成。只有当你需要 Git push 触发自动部署时才需要连接 GitHub。
+
 解析生产 URL，存入 `$VERCEL_URL`。
+
+> **验证 URL 格式**：确认 `$VERCEL_URL` 以 `https://` 开头且不包含第二个 `https`（即不是 `https://https-...`）。若 URL 异常，说明项目名未正确指定，在 Vercel Dashboard 将项目重命名为 `temp-mail` 后重新执行 `vercel --prod --yes --name temp-mail`。
 
 ---
 
@@ -510,6 +623,12 @@ dig MX $DOMAIN +short | grep cloudflare
 无需用户手动进管理面板，直接调用 admin API：
 
 ```bash
+# 安全检查：admin API 必须通过 HTTPS 调用，防止 bearer token 泄露
+if [[ "$WORKER_URL" != https://* ]]; then
+  echo "❌ WORKER_URL 必须以 https:// 开头才能安全发送 ADMIN_PASSWORD，请检查 Phase 7.4 的输出"
+  exit 1
+fi
+
 curl -s -X POST "$WORKER_URL/api/admin/config" \
   -H "Authorization: Bearer $ADMIN_PASSWORD" \
   -H "Content-Type: application/json" \
@@ -535,6 +654,22 @@ curl -s -X POST "$WORKER_URL/api/admin/config" \
 收到邮件 ✅ = 大功告成
 没收到 = 告诉我，我来排查
 ```
+
+### 10.4 收尾报告（给后续 AI agent / 用户存档）
+
+部署完成后，输出一份关键信息汇总，避免后续接手者重新逆向推断：
+
+```
+部署信息汇总：
+- 域名：$DOMAIN
+- Worker URL：$WORKER_URL
+- 前端 URL：$VERCEL_URL
+- Cloudflare zone：$ZONE_ID
+- D1 database：$DATABASE_ID
+- 部署中遇到并解决的问题：（逐条列出，例如 catch-all code 2020、Vercel scope 等）
+```
+
+若用户反馈“没收到邮件”，按「故障排查」逐项核对后再改动配置，**不要凭猜测改代码**。
 
 ---
 
@@ -564,6 +699,29 @@ curl -s "$WORKER_URL/api/config" | python3 -c "import sys,json; print(json.load(
 **Worker 部署失败**：检查 `worker/wrangler.toml` 中 `account_id` 和 `database_id` 是否正确。
 
 **Namecheap API 报 `2030166` 错误**：IP 未在白名单，重新确认 Phase 1.2 第④步的 IP 是否与当前 `$MY_IP` 一致。
+
+**Vercel 域名带双重 https**（如 `https://https-github-com-....vercel.app`）：部署时未传 `--name`，目录名被当成项目名。在 Vercel Dashboard 将项目重命名为 `temp-mail`，然后重新执行 `vercel --prod --yes --name temp-mail`。
+
+**Catch-all 绑定报 `code 2020 / Invalid rule operation`**：这不是 NS/MX 传播问题，**不要让用户等待或手动操作**。根因是 Phase 7.5 在 Worker 尚未部署时就调用了绑定 API，或 Worker 名称与 `actions.value` 不一致。确认 `cd worker && npm run deploy` 已成功、`temp-mail-worker` 这个名字与 `worker/wrangler.toml` 的 `name` 字段一致，然后重新执行 7.5 的 PUT 请求即可。
+
+---
+
+## 追加收信域名（首次部署完成之后）
+
+本指南覆盖的是**首个域名**的全新部署。若系统已上线、只是想再挂一个收信域名，**不要重跑整个流程**——重点是只做增量步骤：
+
+1. 新域名同样要走 Phase 4（建 zone）、Phase 5（改 NS）、Phase 6（等 NS 生效）、Phase 7.5（绑定 catch-all 到**同一个** `temp-mail-worker`，Worker 无需重新部署）。
+2. **不需要**重建 D1、不需要重新部署前端、不需要新建 Vercel 项目。
+3. 通过 admin API 把新域名追加进配置（注意要带上已有域名，POST 是整体覆盖）：
+   ```bash
+   curl -s -X POST "$WORKER_URL/api/admin/config" \
+     -H "Authorization: Bearer $ADMIN_PASSWORD" \
+     -H "Content-Type: application/json" \
+     --data "{\"domains\":[\"existing.com\",\"$NEW_DOMAIN\"]}"
+   ```
+4. CORS 不受影响（域名变的是收信端，不是前端）。
+
+> 项目内已有 `add-email-domain` 技能封装了上述增量流程，用户说“加域名”时应优先调用该技能，而不是手工照搬本指南。
 
 ---
 

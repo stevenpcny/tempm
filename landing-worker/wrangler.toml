@@ -37,3 +37,8 @@ routes = [
   { pattern = "videoad.site/*", zone_name = "videoad.site" },
   { pattern = "www.videoad.site/*", zone_name = "videoad.site" },
 ]
+
+[vars]
+SITE_NAME = "云端接码"
+MAIL_APP_URL = "https://your-app.vercel.app"
+TAGLINE = "免费、自托管的临时邮箱服务"
