@@ -475,7 +475,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     return Response.json({ passwords: rows.results || [], total, page, limit }, { headers });
   }
 
-  // POST /api/passwords — save or update a password for an address
+  // POST /api/passwords — reserve a password for a new address
   // When called from the generate button, saves as confirmed=0 (no quota consumed, hidden from list).
   // confirmed=1 is set only when the first email arrives.
   if (url.pathname === "/api/passwords" && request.method === "POST") {
@@ -487,13 +487,20 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     if (!body.address || !body.password) {
       return Response.json({ error: "address and password required" }, { status: 400, headers });
     }
+    const address = body.address.toLowerCase();
+    const [existingPassword, existingEmail] = await Promise.all([
+      env.DB.prepare("SELECT address FROM passwords WHERE address = ? LIMIT 1").bind(address).first(),
+      env.DB.prepare("SELECT mail_to FROM emails WHERE mail_to = ? LIMIT 1").bind(address).first(),
+    ]);
+    if (existingPassword || existingEmail) {
+      return Response.json({ error: "address already exists" }, { status: 409, headers });
+    }
     const now = Date.now();
     // Save as unconfirmed (confirmed=0); quota is checked and consumed only when email arrives
-    const addrLc = body.address.toLowerCase();
-    const addrDomain = addrLc.includes("@") ? addrLc.slice(addrLc.indexOf("@") + 1) : "";
+    const addrDomain = address.includes("@") ? address.slice(address.indexOf("@") + 1) : "";
     await env.DB.prepare(
-      "INSERT INTO passwords (address, password, label, confirmed, created_at, updated_at, domain) VALUES (?, ?, ?, 0, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET password=excluded.password, label=excluded.label, updated_at=excluded.updated_at, domain=excluded.domain"
-    ).bind(addrLc, body.password, body.label || "", now, now, addrDomain).run();
+      "INSERT INTO passwords (address, password, label, confirmed, created_at, updated_at, domain) VALUES (?, ?, ?, 0, ?, ?, ?)"
+    ).bind(address, body.password, body.label || "", now, now, addrDomain).run();
     return Response.json({ ok: true }, { headers });
   }
 
