@@ -461,7 +461,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     if (end) { where += " AND created_at <= ?"; binds.push(parseInt(end)); }
     if (linkDays) {
       const cutoff = Date.now() - parseInt(linkDays) * 86400000;
-      where += " AND last_link_received_at IS NOT NULL AND last_link_received_at <= ?";
+      where += " AND (last_link_received_at IS NULL OR last_link_received_at <= ?)";
       binds.push(cutoff);
     }
 

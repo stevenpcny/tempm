@@ -810,6 +810,11 @@ export default function Home() {
   const [sseState, setSseState] = useState<ConnState>("connecting");
 
   useEffect(() => {
+    const id = setTimeout(() => window.location.reload(), 30 * 60 * 1000);
+    return () => clearTimeout(id);
+  }, []);
+
+  useEffect(() => {
     if (activeTag === "all") setSseState("connected");
   }, [activeTag]);
 
@@ -893,11 +898,6 @@ export default function Home() {
   // Auto-refresh every 10s when 未收到链接 filter is active
   const loadEntriesRef = useRef(loadEntries);
   useEffect(() => { loadEntriesRef.current = loadEntries; }, [loadEntries]);
-  useEffect(() => {
-    if (!linkDays) return;
-    const id = setInterval(() => { loadEntriesRef.current(); }, 10000);
-    return () => clearInterval(id);
-  }, [linkDays]);
 
   const totalPages = Math.max(1, Math.ceil(totalEntries / PAGE_SIZE));
 
