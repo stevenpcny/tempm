@@ -592,10 +592,6 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
   // GET /api/all-emails — metadata + activation link for all received emails
   if (url.pathname === "/api/all-emails" && request.method === "GET") {
-    if (!await checkAuthFull(request, env)) {
-      return Response.json({ error: "unauthorized" }, { status: 401, headers });
-    }
-
     const rows = await env.DB.prepare(
       "SELECT id, mail_to as 'to', mail_from as 'from', subject, text_body, html_body, timestamp FROM emails ORDER BY timestamp DESC LIMIT ?"
     ).bind(EMAIL_LIST_LIMIT).all();
