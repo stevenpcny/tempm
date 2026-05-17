@@ -732,9 +732,6 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
   // GET /api/stream?tag=xxx&since=timestamp — SSE push for new emails
   if (url.pathname === "/api/stream" && request.method === "GET") {
-    if (!await checkAuthFullOrQueryToken(request, env, url)) {
-      return Response.json({ error: "unauthorized" }, { status: 401, headers });
-    }
     const tag = (url.searchParams.get("tag") || "").toLowerCase();
     if (!tag) return Response.json({ error: "tag required" }, { status: 400, headers });
 
