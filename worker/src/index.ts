@@ -555,9 +555,6 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
   // GET /api/tag-emails?tag=ck — metadata + activation link (supports both new label-based and old dash-tag format)
   if (url.pathname === "/api/tag-emails" && request.method === "GET") {
-    if (!await checkAuthFull(request, env)) {
-      return Response.json({ error: "unauthorized" }, { status: 401, headers });
-    }
     const tag = (url.searchParams.get("tag") || "").toLowerCase();
     if (!tag) return Response.json({ error: "tag required" }, { status: 400, headers });
 
@@ -617,9 +614,6 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
   // GET /api/email-detail?id=xxx — full email content (html + text) on demand
   if (url.pathname === "/api/email-detail" && request.method === "GET") {
-    if (!await checkAuthFull(request, env)) {
-      return Response.json({ error: "unauthorized" }, { status: 401, headers });
-    }
     const id = url.searchParams.get("id") || "";
     if (!id) return Response.json({ error: "id required" }, { status: 400, headers });
     const row = await env.DB.prepare(
